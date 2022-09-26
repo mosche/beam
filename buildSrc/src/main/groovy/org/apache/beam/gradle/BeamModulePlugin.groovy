@@ -1448,6 +1448,7 @@ class BeamModulePlugin implements Plugin<Project> {
             args 'org.apache.beam'
           }
           args '-foe=true'
+          args "-rf=json"
         }
 
         // Single shot of JMH benchmarks ensures that they can execute.

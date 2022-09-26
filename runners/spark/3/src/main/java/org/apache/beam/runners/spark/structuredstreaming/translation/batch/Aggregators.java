@@ -158,7 +158,7 @@ public class Aggregators {
    * @param <ResT> {@link CombineFn} / {@link Aggregator} result type
    * @param <InT> {@link Aggregator} input type
    */
-  private static class SessionsAggregator<ValT, AccT, ResT, InT>
+  public static class SessionsAggregator<ValT, AccT, ResT, InT>
       extends WindowedAggregator<
           ValT,
           AccT,
@@ -167,7 +167,7 @@ public class Aggregators {
           IntervalWindow,
           TreeMap<IntervalWindow, MutablePair<Instant, AccT>>> {
 
-    SessionsAggregator(
+    public SessionsAggregator(
         CombineFn<ValT, AccT, ResT> combineFn,
         Fun1<WindowedValue<InT>, ValT> valueFn,
         WindowingStrategy<?, ?> windowing,
@@ -282,7 +282,7 @@ public class Aggregators {
    * @param <ResT> {@link CombineFn} / {@link Aggregator} result type
    * @param <InT> {@link Aggregator} input type
    */
-  private static class MergingWindowedAggregator<ValT, AccT, ResT, InT>
+  public static class MergingWindowedAggregator<ValT, AccT, ResT, InT>
       extends NonMergingWindowedAggregator<ValT, AccT, ResT, InT> {
 
     private final WindowFn<ValT, BoundedWindow> windowFn;
