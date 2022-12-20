@@ -2160,6 +2160,15 @@ public class PipelineOptionsFactory {
       // Validate that the view of all currently passed in options classes is well formed.
       if (!combinedCache.containsKey(combinedPipelineOptionsInterfaces)) {
         final Class<?>[] interfaces = combinedPipelineOptionsInterfaces.toArray(EMPTY_CLASS_ARRAY);
+        Arrays.sort(
+            interfaces,
+            new Comparator<Class<?>>() {
+              @Override
+              public int compare(Class<?> c1, Class<?> c2) {
+                return c1.getName().compareTo(c2.getName());
+              }
+            });
+
         @SuppressWarnings("unchecked")
         Class<T> allProxyClass =
             (Class<T>) Proxy.getProxyClass(ReflectHelpers.findClassLoader(interfaces), interfaces);

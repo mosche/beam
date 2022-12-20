@@ -446,7 +446,7 @@ class ByteBuddyDoFnInvokerFactory implements DoFnInvokerFactory {
   }
 
   /** Generates a {@link DoFnInvoker} class for the given {@link DoFnSignature}. */
-  private static Class<? extends DoFnInvoker<?, ?>> generateInvokerClass(DoFnSignature signature) {
+  protected static Class<? extends DoFnInvoker<?, ?>> generateInvokerClass(DoFnSignature signature) {
     Class<? extends DoFn<?, ?>> fnClass = signature.fnClass();
 
     final TypeDescription clazzDescription = new TypeDescription.ForLoadedType(fnClass);

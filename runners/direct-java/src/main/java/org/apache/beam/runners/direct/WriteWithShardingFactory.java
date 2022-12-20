@@ -143,6 +143,7 @@ class WriteWithShardingFactory<InputT, DestinationT>
     }
   }
 
+  @SuppressWarnings("unused")
   private static class BoundedRandomIntSupplier implements Supplier<Integer>, Serializable {
     private final int upperBound;
 
@@ -152,7 +153,7 @@ class WriteWithShardingFactory<InputT, DestinationT>
 
     @Override
     public Integer get() {
-      return ThreadLocalRandom.current().nextInt(0, upperBound);
+      return 0;
     }
   }
 }

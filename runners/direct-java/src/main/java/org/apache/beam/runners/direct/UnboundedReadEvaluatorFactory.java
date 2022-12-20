@@ -56,7 +56,7 @@ import org.joda.time.Instant;
 })
 class UnboundedReadEvaluatorFactory implements TransformEvaluatorFactory {
   // Occasionally close an existing reader and resume from checkpoint, to exercise close-and-resume
-  private static final double DEFAULT_READER_REUSE_CHANCE = 0.95;
+  private static final double DEFAULT_READER_REUSE_CHANCE = 1.0;
 
   private final EvaluationContext evaluationContext;
   private final PipelineOptions options;
