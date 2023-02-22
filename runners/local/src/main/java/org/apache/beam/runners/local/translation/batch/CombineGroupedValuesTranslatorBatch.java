@@ -17,15 +17,15 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.io.IOException;
 import org.apache.beam.runners.local.translation.Dataset;
+import org.apache.beam.runners.local.translation.Dataset.MapFn;
 import org.apache.beam.runners.local.translation.TransformTranslator;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.transforms.CombineWithContext;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
-import java.io.IOException;
 
 class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
     extends TransformTranslator<
@@ -38,7 +38,7 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
       throws IOException {
 
     CombineFn<InT, AccT, OutT> combineFn = (CombineFn<InT, AccT, OutT>) transform.getFn();
-    Dataset.MapFn<KV<K, Iterable<InT>>, KV<K, OutT>> reduceValuesFn =
+    MapFn<KV<K, Iterable<InT>>, KV<K, OutT>> reduceValuesFn =
         wv -> {
           KV<K, Iterable<InT>> kv = wv.getValue();
           AccT acc = null;
@@ -50,8 +50,8 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
         };
 
     Dataset<KV<K, Iterable<InT>>> dataset =
-        (Dataset<KV<K, Iterable<InT>>>) cxt.getDataset(cxt.getInput());
-    cxt.putDataset(cxt.getOutput(), dataset.map(reduceValuesFn));
+        (Dataset<KV<K, Iterable<InT>>>) cxt.requireDataset(cxt.getInput());
+    cxt.provideDataset(cxt.getOutput(), dataset.map(cxt.fullName(), reduceValuesFn));
   }
 
   @Override

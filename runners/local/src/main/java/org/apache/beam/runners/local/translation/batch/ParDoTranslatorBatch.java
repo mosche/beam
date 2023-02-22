@@ -17,6 +17,20 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import static java.util.Collections.EMPTY_MAP;
+import static org.apache.beam.runners.core.construction.ParDoTranslation.getSchemaInformation;
+import static org.apache.beam.sdk.transforms.Materializations.ITERABLE_MATERIALIZATION_URN;
+import static org.apache.beam.sdk.transforms.Materializations.MULTIMAP_MATERIALIZATION_URN;
+import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
+
+import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Spliterator;
+import java.util.function.Consumer;
 import org.apache.beam.runners.core.DoFnRunner;
 import org.apache.beam.runners.core.DoFnRunners;
 import org.apache.beam.runners.core.InMemoryMultimapSideInputView;
@@ -55,21 +69,6 @@ import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Immutabl
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import org.checkerframework.checker.nullness.qual.Nullable;
-
-import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Spliterator;
-import java.util.function.Consumer;
-
-import static java.util.Collections.EMPTY_MAP;
-import static org.apache.beam.runners.core.construction.ParDoTranslation.getSchemaInformation;
-import static org.apache.beam.sdk.transforms.Materializations.ITERABLE_MATERIALIZATION_URN;
-import static org.apache.beam.sdk.transforms.Materializations.MULTIMAP_MATERIALIZATION_URN;
-import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
-import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
 class ParDoTranslatorBatch<InT, OutT>
     extends TransformTranslator<
@@ -128,10 +127,11 @@ class ParDoTranslatorBatch<InT, OutT>
     SideInputReader sideInputs = createSideInputs(transform.getSideInputs().values(), cxt);
     String name = cxt.getCurrentTransform().getFullName();
 
-    cxt.putDataset(
+    cxt.provideDataset(
         cxt.getOutput(mainOut),
-        cxt.getDataset(input)
-            .lazyTransform(
+        cxt.requireDataset(input)
+            .transform(
+                cxt.fullName(),
                 s ->
                     new DoFnSpliterator<>(
                         name, s, opts, fn, mainOut, additionalOuts, sideInputs, schema, metrics)));
@@ -144,7 +144,7 @@ class ParDoTranslatorBatch<InT, OutT>
     Map<TupleTag<?>, Dataset<?>> datasets = Maps.newHashMapWithExpectedSize(views.size());
     for (PCollectionView<?> view : views) {
       PCollection<T> pCol = checkStateNotNull((PCollection<T>) view.getPCollection());
-      datasets.put(view.getTagInternal(), cxt.getDataset(pCol));
+      datasets.put(view.getTagInternal(), cxt.requireDataset(pCol));
     }
     return new GlobalSideInputReader(datasets);
   }
@@ -176,13 +176,13 @@ class ParDoTranslatorBatch<InT, OutT>
     }
 
     static <ViewT, T> ViewT iterableView(ViewFn<IterableView<T>, ViewT> fn, Dataset<T> ds) {
-      Iterable<T> it = Iterables.transform(ds.iterable(), WindowedValue::getValue);
+      Iterable<T> it = Iterables.transform(ds, WindowedValue::getValue);
       return fn.apply(() -> it);
     }
 
     static <K, V, ViewT> ViewT multimapView(
         ViewFn<MultimapView<K, V>, ViewT> fn, Coder<K> coder, Dataset<KV<K, V>> ds) {
-      Iterable<KV<K, V>> it = Iterables.transform(ds.iterable(), WindowedValue::getValue);
+      Iterable<KV<K, V>> it = Iterables.transform(ds, WindowedValue::getValue);
       return fn.apply(InMemoryMultimapSideInputView.fromIterable(coder, it));
     }
 
@@ -218,7 +218,6 @@ class ParDoTranslatorBatch<InT, OutT>
 
   private static class DoFnSpliterator<InT, OutT>
       implements Spliterator<WindowedValue<OutT>>, DoFnRunners.OutputManager {
-
     private static final byte CREATED = 0;
     private static final byte RUNNING = 1;
     private static final byte FINISHED = 2;
@@ -301,16 +300,18 @@ class ParDoTranslatorBatch<InT, OutT>
             return true;
           }
           if (input.tryAdvance(wv -> runner.processElement(wv))) {
-            continue;
+            // continue with loop to consume from buffer
           } else if (state == RUNNING) {
             state = FINISHED;
             runner.finishBundle();
           } else {
+            // FIXME
             // DoFnInvokers.invokerFor(runner.getFn()).invokeTeardown();
             return false;
           }
         }
       } catch (RuntimeException e) {
+        // FIXME
         // DoFnInvokers.invokerFor(runner.getFn()).invokeTeardown();
         throw e;
       }
@@ -318,7 +319,7 @@ class ParDoTranslatorBatch<InT, OutT>
 
     @Override
     public long estimateSize() {
-      return Integer.MAX_VALUE;
+      return input.estimateSize();
     }
 
     @Override

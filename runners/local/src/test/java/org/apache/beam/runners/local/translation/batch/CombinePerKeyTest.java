@@ -17,8 +17,8 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
-import org.apache.beam.runners.local.LocalPipelineOptions;
-import org.apache.beam.runners.local.LocalRunner;
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
@@ -29,9 +29,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
 import org.junit.Rule;
 import org.junit.Test;
-
-import java.util.ArrayList;
-import java.util.List;
 
 public class CombinePerKeyTest {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());

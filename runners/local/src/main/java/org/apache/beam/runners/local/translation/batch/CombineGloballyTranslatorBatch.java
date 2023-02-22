@@ -17,6 +17,9 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.util.Collection;
+import java.util.List;
+import javax.annotation.Nullable;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTask;
 import org.apache.beam.runners.local.translation.TransformTranslator;
@@ -24,13 +27,7 @@ import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
-
-import javax.annotation.Nullable;
-import java.util.Collection;
-import java.util.List;
-import java.util.Spliterator;
 
 class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     extends TransformTranslator<PCollection<InT>, PCollection<OutT>, Combine.Globally<InT, OutT>> {
@@ -38,41 +35,22 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
   @Override
   protected void translate(Combine.Globally<InT, OutT> transform, Context cxt) {
     CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) transform.getFn();
-    Dataset<InT> dataset = cxt.getDataset(cxt.getInput());
-    cxt.putDataset(cxt.getOutput(), dataset.transform(splits -> new CombineTask<>(splits, fn)));
+    Dataset<InT> inputDs = cxt.requireDataset(cxt.getInput());
+    Dataset<OutT> resultDs = inputDs.evaluate(new CombineTask<>(cxt.fullName(), fn));
+    cxt.provideDataset(cxt.getOutput(), resultDs);
   }
 
   private static class CombineTask<InT, AccT, OutT>
-      extends TransformTask<WindowedValue<InT>, AccT, Collection<WindowedValue<OutT>>, CombineTask<InT, AccT, OutT>> {
+      extends TransformTask<InT, AccT, Collection<WindowedValue<OutT>>> {
     final CombineFn<InT, AccT, OutT> fn;
 
-    CombineTask(List<Spliterator<WindowedValue<InT>>> splits, CombineFn<InT, AccT, OutT> fn) {
-      this(null, null, splits, 0, splits.size(), fn);
-    }
-
-    private CombineTask(
-        @Nullable CombineTask<InT, AccT, OutT> parent,
-        @Nullable CombineTask<InT, AccT, OutT> next,
-        List<Spliterator<WindowedValue<InT>>> splits,
-        int lo,
-        int hi,
-        CombineFn<InT, AccT, OutT> fn) {
-      super(parent, next, splits, lo, hi);
+    private CombineTask(String name, CombineFn<InT, AccT, OutT> fn) {
+      super(name);
       this.fn = fn;
     }
 
     @Override
-    protected CombineTask<InT, AccT, OutT> subTask(
-        CombineTask<InT, AccT, OutT> parent,
-        CombineTask<InT, AccT, OutT> next,
-        List<Spliterator<WindowedValue<InT>>> splits,
-        int lo,
-        int hi) {
-      return new CombineTask<>(parent, next, splits, lo, hi, fn);
-    }
-
-    @Override
-    protected AccT add(@Nullable AccT acc, WindowedValue<InT> wv) {
+    protected AccT add(@Nullable AccT acc, WindowedValue<InT> wv, int idx) {
       return fn.addInput(acc != null ? acc : fn.createAccumulator(), wv.getValue());
     }
 

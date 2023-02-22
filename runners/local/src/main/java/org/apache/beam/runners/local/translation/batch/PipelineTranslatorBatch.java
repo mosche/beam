@@ -17,6 +17,8 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.local.translation.PipelineTranslator;
 import org.apache.beam.runners.local.translation.TransformTranslator;
@@ -32,9 +34,6 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.checkerframework.checker.nullness.qual.Nullable;
-
-import java.util.HashMap;
-import java.util.Map;
 
 @Internal
 public class PipelineTranslatorBatch extends PipelineTranslator {

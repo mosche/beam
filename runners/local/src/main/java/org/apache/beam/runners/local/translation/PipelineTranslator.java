@@ -17,6 +17,15 @@
  */
 package org.apache.beam.runners.local.translation;
 
+import static org.apache.beam.sdk.Pipeline.PipelineVisitor.CompositeBehavior.DO_NOT_ENTER_TRANSFORM;
+import static org.apache.beam.sdk.Pipeline.PipelineVisitor.CompositeBehavior.ENTER_TRANSFORM;
+import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
 import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.local.LocalPipelineOptions;
@@ -31,19 +40,8 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
-import static org.apache.beam.sdk.Pipeline.PipelineVisitor.CompositeBehavior.DO_NOT_ENTER_TRANSFORM;
-import static org.apache.beam.sdk.Pipeline.PipelineVisitor.CompositeBehavior.ENTER_TRANSFORM;
-import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 
 @Internal
 @SuppressWarnings("unused")
@@ -66,39 +64,16 @@ public abstract class PipelineTranslator {
   }
 
   private static final class TranslationResult<T> {
-    private final String name;
-
-    private @MonotonicNonNull Dataset<T> dataset = null;
-
-    // dependent downstream transforms (if empty this is a leaf)
-    private final Set<PTransform<?, ?>> dependentTransforms = new HashSet<>();
-
-    private TranslationResult(PCollection<?> pCol) {
-      this.name = pCol.getName();
-    }
-
-    public String name() {
-      return name;
-    }
-
-    public @Nullable Dataset<T> dataset() {
-      return dataset;
-    }
-
-    private boolean isLeaf() {
-      return dependentTransforms.isEmpty();
-    }
-
-    private int usages() {
-      return dependentTransforms.size();
-    }
+    private @Nullable Dataset<T> dataset = null;
+    private int usages = 0;
+    private final Set<PTransform<?, ?>> requiredBy = new HashSet<>();
   }
 
   /** Shared, mutable state during the translation of a pipeline. */
   public interface TranslationState {
-    <T> Dataset<T> getDataset(PCollection<T> pCollection);
+    <T> Dataset<T> requireDataset(PCollection<T> pCollection);
 
-    <T> void putDataset(PCollection<T> pCollection, Dataset<T> dataset);
+    <T> void provideDataset(PCollection<T> pCollection, Dataset<T> dataset);
 
     MetricsContainerStepMap getMetrics();
 
@@ -143,18 +118,26 @@ public abstract class PipelineTranslator {
     }
 
     @Override
-    public <T> Dataset<T> getDataset(PCollection<T> pCollection) {
-      // FIXME remove once used
-      return checkStateNotNull(getResult(pCollection).dataset);
+    public <T> Dataset<T> requireDataset(PCollection<T> pCollection) {
+      TranslationResult<T> result = getResult(pCollection);
+      Dataset<T> dataset = result.dataset;
+      if (--result.usages == 0) {
+        result.dataset = null;
+      }
+      return checkStateNotNull(dataset);
     }
 
     @Override
-    public <T> void putDataset(PCollection<T> pCollection, Dataset<T> dataset) {
-      // If dataset is used multiple times or if it is a leaf, collect it into memory.
-      // This is particularly necessary for leaves to trigger the evaluation in case of lazy
-      // datasets.
+    public <T> void provideDataset(PCollection<T> pCollection, Dataset<T> dataset) {
       TranslationResult<T> res = getResult(pCollection);
-      res.dataset = res.usages() > 1 || res.isLeaf() ? dataset.collect() : dataset;
+      if (res.requiredBy.isEmpty()) {
+        // Force evaluation of leaf dataset and drop it.
+        dataset.evaluate();
+      } else {
+        // If dataset is used multiple times collect it into memory.
+        res.usages = res.requiredBy.size();
+        res.dataset = res.usages > 1 ? dataset.collect() : dataset;
+      }
     }
 
     @Override
@@ -164,7 +147,7 @@ public abstract class PipelineTranslator {
 
     @Override
     public boolean isLeaf(PCollection<?> pCollection) {
-      return getResult(pCollection).isLeaf();
+      return getResult(pCollection).requiredBy.isEmpty();
     }
 
     @Override
@@ -189,10 +172,10 @@ public abstract class PipelineTranslator {
         TransformTranslator<InT, OutT, PTransform<InT, OutT>> translator) {
       for (Map.Entry<TupleTag<?>, PCollection<?>> entry : node.getInputs().entrySet()) {
         TranslationResult<?> input = checkStateNotNull(results.get(entry.getValue()));
-        input.dependentTransforms.add(transform);
+        input.requiredBy.add(transform);
       }
       for (PCollection<?> pOut : node.getOutputs().values()) {
-        results.put(pOut, new TranslationResult<>(pOut));
+        results.put(pOut, new TranslationResult<>());
       }
     }
   }

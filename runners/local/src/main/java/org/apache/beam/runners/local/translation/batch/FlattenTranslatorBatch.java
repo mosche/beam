@@ -17,15 +17,14 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTranslator;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
 
 class FlattenTranslatorBatch<T>
     extends TransformTranslator<PCollectionList<T>, PCollection<T>, Flatten.PCollections<T>> {
@@ -35,8 +34,8 @@ class FlattenTranslatorBatch<T>
     Collection<PCollection<T>> values = (Collection) cxt.getInputs().values();
     List<Dataset<T>> datasets = new ArrayList<>();
     for (PCollection<T> pCol : values) {
-      datasets.add(cxt.getDataset(pCol));
+      datasets.add(cxt.requireDataset(pCol));
     }
-    cxt.putDataset(cxt.getOutput(), Dataset.union(datasets));
+    cxt.provideDataset(cxt.getOutput(), Dataset.union(cxt.fullName(), datasets));
   }
 }

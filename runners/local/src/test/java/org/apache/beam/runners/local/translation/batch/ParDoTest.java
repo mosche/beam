@@ -17,6 +17,8 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.util.List;
+import java.util.Map;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
@@ -31,9 +33,6 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
 import org.junit.Rule;
 import org.junit.Test;
-
-import java.util.List;
-import java.util.Map;
 
 public class ParDoTest {
   @Rule public transient TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());

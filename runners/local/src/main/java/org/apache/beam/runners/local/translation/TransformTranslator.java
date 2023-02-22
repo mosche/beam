@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.local.translation;
 
+import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables.getOnlyElement;
 
 import java.util.Map;
@@ -31,7 +32,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 @Internal
 public abstract class TransformTranslator<
@@ -68,9 +68,6 @@ public abstract class TransformTranslator<
     private final AppliedPTransform<InT, OutT, TransformT> transform;
     private final PipelineTranslator.TranslationState state;
 
-    private @MonotonicNonNull InT pIn = null;
-    private @MonotonicNonNull OutT pOut = null;
-
     private Context(
         AppliedPTransform<InT, OutT, TransformT> transform,
         PipelineTranslator.TranslationState state) {
@@ -78,18 +75,19 @@ public abstract class TransformTranslator<
       this.state = state;
     }
 
+    public String fullName() {
+      return transform.getFullName();
+    }
+
     public int getSplits() {
       return getOptions().getSplits();
     }
 
     public InT getInput() {
-      if (pIn == null) {
-        pIn = (InT) getOnlyElement(TransformInputs.nonAdditionalInputs(transform));
-      }
-      return pIn;
+      return (InT) getOnlyElement(TransformInputs.nonAdditionalInputs(transform));
     }
 
-    public MetricsContainer getMetricsContainer(){
+    public MetricsContainer getMetricsContainer() {
       return state.getMetrics().getContainer(transform.getFullName());
     }
 
@@ -107,18 +105,12 @@ public abstract class TransformTranslator<
     }
 
     public OutT getOutput() {
-      if (pOut == null) {
-        pOut = (OutT) getOnlyElement(transform.getOutputs().values());
-      }
-      return pOut;
+      return (OutT) getOnlyElement(transform.getOutputs().values());
     }
 
     public <T> PCollection<T> getOutput(TupleTag<T> tag) {
-      PCollection<T> pc = (PCollection<T>) transform.getOutputs().get(tag);
-      if (pc == null) {
-        throw new IllegalStateException("No output for tag " + tag);
-      }
-      return pc;
+      return checkStateNotNull(
+          (PCollection<T>) transform.getOutputs().get(tag), "Invalid tag %", tag);
     }
 
     public AppliedPTransform<InT, OutT, TransformT> getCurrentTransform() {
@@ -126,13 +118,13 @@ public abstract class TransformTranslator<
     }
 
     @Override
-    public <T> Dataset<T> getDataset(PCollection<T> pCollection) {
-      return state.getDataset(pCollection);
+    public <T> Dataset<T> requireDataset(PCollection<T> pCollection) {
+      return state.requireDataset(pCollection);
     }
 
     @Override
-    public <T> void putDataset(PCollection<T> pCollection, Dataset<T> dataset) {
-      state.putDataset(pCollection, dataset);
+    public <T> void provideDataset(PCollection<T> pCollection, Dataset<T> dataset) {
+      state.provideDataset(pCollection, dataset);
     }
 
     @Override

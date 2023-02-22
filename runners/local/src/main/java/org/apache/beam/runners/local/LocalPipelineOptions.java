@@ -40,8 +40,7 @@ public interface LocalPipelineOptions extends PipelineOptions {
   class DefaultSplits implements DefaultValueFactory<Integer> {
     @Override
     public Integer create(PipelineOptions options) {
-      //return IntMath.log2(Runtime.getRuntime().availableProcessors(), RoundingMode.CEILING);
-      return 2;
+      return IntMath.log2(Runtime.getRuntime().availableProcessors(), RoundingMode.FLOOR);
     }
   }
 }

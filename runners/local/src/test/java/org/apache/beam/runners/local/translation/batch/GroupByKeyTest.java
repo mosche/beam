@@ -17,23 +17,27 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import static org.apache.beam.sdk.testing.SerializableMatchers.containsInAnyOrder;
+import static org.hamcrest.MatcherAssert.assertThat;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.sdk.schemas.transforms.CoGroup;
+import org.apache.beam.sdk.schemas.transforms.CoGroup.By;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.GroupByKey;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionTuple;
+import org.apache.beam.sdk.values.Row;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
 import org.junit.Rule;
 import org.junit.Test;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-
-import static org.apache.beam.sdk.testing.SerializableMatchers.containsInAnyOrder;
-import static org.hamcrest.MatcherAssert.assertThat;
 
 public class GroupByKeyTest implements Serializable {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
@@ -54,6 +58,39 @@ public class GroupByKeyTest implements Serializable {
               assertThat(results.get(2), containsInAnyOrder(2, 4, 6));
               return null;
             });
+    pipeline.run();
+  }
+
+  @Test
+  public void testCoGroupJoin() {
+    Schema schemaA = Schema.builder().addStringField("ida").addStringField("val").build();
+    Schema schemaB = Schema.builder().addStringField("idb").addStringField("val").build();
+    Schema resSchema = Schema.builder().addRowField("a", schemaA).addRowField("b", schemaB).build();
+
+    Row id1a1 = Row.withSchema(schemaA).addValues("id1", "a1").build();
+    Row id2a2 = Row.withSchema(schemaA).addValues("id2", "a2").build();
+    Row id1b1 = Row.withSchema(schemaB).addValues("id1", "b1").build();
+    Row id2b2 = Row.withSchema(schemaB).addValues("id2", "b2").build();
+    Row id2b3 = Row.withSchema(schemaB).addValues("id2", "b3").build();
+
+    PCollection<Row> inA = pipeline.apply("a", Create.of(id1a1, id2a2)).setRowSchema(schemaA);
+    PCollection<Row> inB =
+        pipeline.apply("b", Create.of(id1b1, id2b2, id2b3)).setRowSchema(schemaB);
+
+    PCollection<Row> joined =
+        PCollectionTuple.of("a", inA, "b", inB)
+            .apply(
+                CoGroup.join("a", By.fieldNames("ida"))
+                    .join("b", By.fieldNames("idb"))
+                    .crossProductJoin());
+    // .apply(CoGroup.join(CoGroup.By.fieldNames("id")).crossProductJoin());
+
+    PAssert.that(joined)
+        .containsInAnyOrder(
+            Row.withSchema(resSchema).addValues(id1a1, id1b1).build(),
+            Row.withSchema(resSchema).addValues(id2a2, id2b2).build(),
+            Row.withSchema(resSchema).addValues(id2a2, id2b3).build());
+
     pipeline.run();
   }
 

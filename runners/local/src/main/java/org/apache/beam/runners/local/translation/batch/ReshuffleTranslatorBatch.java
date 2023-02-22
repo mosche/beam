@@ -29,8 +29,8 @@ class ReshuffleTranslatorBatch<K, V>
 
   @Override
   protected void translate(Reshuffle<K, V> transform, Context cxt) throws IOException {
-    Dataset<KV<K, V>> dataset = cxt.getDataset(cxt.getInput());
-    cxt.putDataset(cxt.getOutput(), dataset); // noop
+    Dataset<KV<K, V>> dataset = cxt.requireDataset(cxt.getInput());
+    cxt.provideDataset(cxt.getOutput(), dataset); // noop
   }
 
   static class ViaRandomKey<V>
@@ -38,8 +38,8 @@ class ReshuffleTranslatorBatch<K, V>
 
     @Override
     protected void translate(Reshuffle.ViaRandomKey<V> transform, Context cxt) throws IOException {
-      Dataset<V> dataset = cxt.getDataset(cxt.getInput());
-      cxt.putDataset(cxt.getOutput(), dataset); // noop
+      Dataset<V> dataset = cxt.requireDataset(cxt.getInput());
+      cxt.provideDataset(cxt.getOutput(), dataset); // noop
     }
   }
 }

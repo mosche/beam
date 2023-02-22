@@ -17,71 +17,79 @@
  */
 package org.apache.beam.runners.local.translation;
 
+import static java.util.Collections.EMPTY_LIST;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Spliterator;
+import javax.annotation.Nullable;
+import org.apache.beam.runners.local.translation.utils.ConcatList;
+import org.apache.beam.runners.local.translation.utils.Spliterable;
+import org.apache.beam.runners.local.translation.utils.Spliterators;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterators;
 
-import javax.annotation.Nullable;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.Spliterator;
-import java.util.function.Consumer;
+@SuppressWarnings("unused")
+public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
 
-public abstract class Dataset<T> {
   public static <T, SplitT extends Iterable<WindowedValue<T>>> Dataset<T> ofSplits(
-      List<SplitT> splits) {
-    return new PreSplitDataset<>(splits, false);
+      String name, List<SplitT> splits) {
+    return new PreSplit<>(name, splits);
   }
 
-  public static <T> Dataset<T> of(List<WindowedValue<T>> records, int splitLevels) {
-    return new CollectionDataset<>(records, splitLevels);
+  public static <T> Dataset<T> ofRecords(
+      String name, List<WindowedValue<T>> records, int splitLevels) {
+    return new Records<>(name, records, splitLevels);
   }
 
-  public static <T> Dataset<T> union(List<Dataset<T>> datasets) {
-    return new UnionDataset<>(datasets);
+  public static <T> Dataset<T> union(String name, List<Dataset<T>> datasets) {
+    return new Union<>(name, datasets);
   }
 
   protected final int splitLevels;
+  protected final String name;
 
-  private Dataset(int splitLevels) {
+  private Dataset(String name, int splitLevels) {
+    this.name = name;
     this.splitLevels = splitLevels;
   }
 
-  public <T2> Dataset<T2> transform(
-      TransformTask.Factory<WindowedValue<T>, Collection<WindowedValue<T2>>> factory) {
-    return new CollectionDataset<>(factory.create(spliterators()).invoke(), splitLevels);
+  public <T2> Dataset<T2> evaluate(TransformTask<T, ?, Collection<WindowedValue<T2>>> tf) {
+    return new Records<>(name, tf.evaluate(this), splitLevels);
   }
 
   public interface TransformFn<T1, T2>
       extends Function<Spliterator<WindowedValue<T1>>, Spliterator<WindowedValue<T2>>> {}
 
-  public <T2> Dataset<T2> lazyTransform(TransformFn<T, T2> fn) {
-    return new TransformedDataset<>(this, fn);
+  public interface MapFn<T1, T2> extends Function<WindowedValue<T1>, WindowedValue<T2>> {}
+
+  public <T2> Dataset<T2> transform(String name, TransformFn<T, T2> fn) {
+    return new Transformed<>(name, this, fn);
   }
 
-  public interface MapFn<T1, T2> extends Function<WindowedValue<T1>, WindowedValue<T2>>{}
-
-  public <T2> Dataset<T2> map(MapFn<T, T2> mapFn) {
-    return lazyTransform(s -> new MapSpliterator<>(s, mapFn));
+  public <T2> Dataset<T2> map(String name, MapFn<T, T2> mapFn) {
+    return transform(name, s -> Spliterators.map(s, mapFn));
   }
 
   public abstract List<Spliterator<WindowedValue<T>>> spliterators();
 
-  public abstract Iterable<WindowedValue<T>> iterable();
+  public Dataset<T> collect() {
+    return evaluate(new PersistTask<T>(name));
+  }
 
-  public abstract Dataset<T> collect();
+  public void evaluate() {
+    new EvalTask<T>(name).evaluate(this);
+  }
 
   /** In-memory dataset wrapping a collection of records. */
-  private static class CollectionDataset<T> extends Dataset<T> {
+  private static class Records<T> extends Dataset<T> {
     final Collection<WindowedValue<T>> col;
 
-    CollectionDataset(Collection<WindowedValue<T>> col, int splits) {
-      super(splits);
+    Records(String name, Collection<WindowedValue<T>> col, int splits) {
+      super(name, splits);
       this.col = col;
     }
 
@@ -92,45 +100,32 @@ public abstract class Dataset<T> {
 
     @Override
     public List<Spliterator<WindowedValue<T>>> spliterators() {
-      return createSplits(col.spliterator(), splitLevels);
+      return createSplits(spliterator(), splitLevels);
     }
 
     @Override
-    public Iterable<WindowedValue<T>> iterable() {
-      return col;
+    public Spliterator<WindowedValue<T>> spliterator() {
+      return col.spliterator();
     }
 
-    private static <T> List<Spliterator<T>> createSplits(Spliterator<T> spliterator, int levels) {
-      ArrayList<Spliterator<T>> akk = new ArrayList<>(2 ^ levels);
-      akk.add(spliterator);
-      createSplits(spliterator, levels, akk);
-      return akk;
+    @Override
+    public Iterator<WindowedValue<T>> iterator() {
+      return col.iterator();
     }
 
-    private static <T> void createSplits(
-        Spliterator<T> spliterator, int levels, List<Spliterator<T>> akk) {
-      if (levels == 0) {
-        return;
-      }
-      Spliterator<T> split = spliterator.trySplit();
-      if (split != null) {
-        createSplits(spliterator, levels - 1, akk);
-        akk.add(split);
-        createSplits(split, levels - 1, akk);
-      }
+    @Override
+    public String toString() {
+      return "Records[" + col.size() + "]";
     }
   }
 
-  /** Dataset pre-split into multiple iterables (possible being in-memory). */
-  private static class PreSplitDataset<T, SplitT extends Iterable<WindowedValue<T>>>
-      extends Dataset<T> {
+  /** Dataset pre-split into multiple iterables. */
+  private static class PreSplit<T, SplitT extends Iterable<WindowedValue<T>>> extends Dataset<T> {
     final List<SplitT> splits;
-    final boolean inMemory;
 
-    PreSplitDataset(List<SplitT> splits, boolean inMemory) {
-      super(splits.size());
+    PreSplit(String name, List<SplitT> splits) {
+      super(name, splits.size());
       this.splits = splits;
-      this.inMemory = inMemory;
     }
 
     @Override
@@ -143,209 +138,146 @@ public abstract class Dataset<T> {
     }
 
     @Override
-    public Iterable<WindowedValue<T>> iterable() {
-      return Iterables.concat(splits);
+    public Spliterator<WindowedValue<T>> spliterator() {
+      return Spliterators.concat(spliterators());
     }
 
     @Override
-    public Dataset<T> collect() {
-      return inMemory ? this : new PersistTask<>(spliterators()).invoke();
+    public String toString() {
+      return "PreSplit[" + splits.size() + "]";
     }
   }
 
-  /** Dataset as union of several datasets, collected as in-memory {@link PreSplitDataset}. */
-  private static class UnionDataset<T> extends Dataset<T> {
+  /** Dataset as union of several datasets, collected as in-memory {@link PreSplit}. */
+  private static class Union<T> extends Dataset<T> {
     final List<Dataset<T>> datasets;
 
-    public UnionDataset(List<Dataset<T>> datasets) {
-      super(datasets.size() > 0 ? datasets.get(0).splitLevels : 0);
+    public Union(String name, List<Dataset<T>> datasets) {
+      super(name, datasets.size() > 0 ? datasets.get(0).splitLevels : 0);
       this.datasets = datasets;
     }
 
     @Override
     public List<Spliterator<WindowedValue<T>>> spliterators() {
-      List<Spliterator<WindowedValue<T>>> list = new ArrayList<>();
-      for (Dataset<T> ds : datasets) {
-        list.addAll(ds.spliterators());
-      }
-      return list;
+      return createSplits(spliterator(), splitLevels);
     }
 
     @Override
-    public Iterable<WindowedValue<T>> iterable() {
-      List<Iterable<WindowedValue<T>>> iterables = new ArrayList<>(datasets.size());
-      for (Dataset<T> ds : datasets) {
-        iterables.add(ds.iterable());
-      }
-      return Iterables.concat(iterables);
+    public Spliterator<WindowedValue<T>> spliterator() {
+      return Spliterators.concat(Iterables.transform(datasets, ds -> ds.spliterator()));
     }
 
     @Override
-    public Dataset<T> collect() {
-      return new PersistTask<>(spliterators()).invoke();
+    public String toString() {
+      return "Union" + Iterables.toString(datasets);
     }
   }
 
-  /** Lazily transformed dataset, collected as in-memory {@link PreSplitDataset}. */
-  private static class TransformedDataset<T1, T2> extends Dataset<T2> {
+  /** Lazily transformed dataset, collected as in-memory {@link PreSplit}. */
+  private static class Transformed<T1, T2> extends Dataset<T2> {
     final Dataset<T1> dataset;
     final TransformFn<T1, T2> fn;
 
-    TransformedDataset(Dataset<T1> dataset, TransformFn<T1, T2> fn) {
-      super(dataset.splitLevels);
+    Transformed(String name, Dataset<T1> dataset, TransformFn<T1, T2> fn) {
+      super(name, dataset.splitLevels);
       this.dataset = dataset;
       this.fn = fn;
     }
 
     @Override
+    public <T3> Dataset<T3> transform(String name, TransformFn<T2, T3> fn) {
+      return new Transformed<>(name, dataset, t1 -> fn.apply(this.fn.apply(t1)));
+    }
+
+    @Override
     public List<Spliterator<WindowedValue<T2>>> spliterators() {
       List<Spliterator<WindowedValue<T1>>> splits = dataset.spliterators();
-      List<Spliterator<WindowedValue<T2>>> spliterators = new ArrayList<>(splits.size());
+      List<Spliterator<WindowedValue<T2>>> transformed = new ArrayList<>(splits.size());
       for (Spliterator<WindowedValue<T1>> split : splits) {
-        spliterators.add(fn.apply(split));
+        transformed.add(fn.apply(split));
       }
-      return spliterators;
+      return transformed;
     }
 
     @Override
-    public Iterable<WindowedValue<T2>> iterable() {
-      return () -> {
-        List<Spliterator<WindowedValue<T1>>> splits = dataset.spliterators();
-        List<Iterator<WindowedValue<T2>>> iterators = new ArrayList<>(splits.size());
-        for (Spliterator<WindowedValue<T1>> split : splits) {
-          iterators.add(new SpliteratorAsIterator<>(fn.apply(split)));
-        }
-        return Iterators.concat(iterators.iterator());
-      };
+    public Spliterator<WindowedValue<T2>> spliterator() {
+      return fn.apply(dataset.spliterator());
     }
 
     @Override
-    public Dataset<T2> collect() {
-      return new PersistTask<>(spliterators()).invoke();
+    public String toString() {
+      return "Transformed[" + dataset + "]";
     }
   }
 
-  /**
-   * Spliterable offers a first class {@link Spliterator}. The corresponding {@link Iterator} is
-   * derived from the {@link Spliterator} rather then the other way around.
-   */
-  public interface Spliterable<T> extends Iterable<T> {
-    @Override
-    default Iterator<T> iterator() {
-      return new SpliteratorAsIterator<>(spliterator());
-    }
-
-    @Override
-    Spliterator<T> spliterator();
+  private static <X> List<Spliterator<X>> createSplits(Spliterator<X> split, int splitLevels) {
+    List<Spliterator<X>> splits = new ArrayList<>(2 ^ splitLevels);
+    splits.add(split);
+    createSplits(split, splitLevels, splits);
+    return splits;
   }
 
-  /** Spliterator lazily applying a function t1 -> t2 to each record. */
-  private static class MapSpliterator<T1, T2> implements Spliterator<T2> {
-    final Spliterator<T1> spliterator;
-    final Function<T1, T2> mapFn;
-
-    MapSpliterator(Spliterator<T1> spliterator, Function<T1, T2> fn) {
-      this.spliterator = spliterator;
-      this.mapFn = fn;
+  private static <X> void createSplits(
+      Spliterator<X> sit, int levels, List<Spliterator<X>> splits) {
+    if (levels == 0 || sit.estimateSize() < 100) {
+      return;
     }
-
-    @Override
-    public boolean tryAdvance(Consumer<? super T2> action) {
-      return spliterator.tryAdvance(t1 -> action.accept(mapFn.apply(t1)));
-    }
-
-    @Override
-    public Spliterator<T2> trySplit() {
-      Spliterator<T1> split = spliterator.trySplit();
-      return split != null ? new MapSpliterator<>(split, mapFn) : null;
-    }
-
-    @Override
-    public long estimateSize() {
-      return spliterator.estimateSize();
-    }
-
-    @Override
-    public int characteristics() {
-      return spliterator.characteristics();
+    Spliterator<X> next = sit.trySplit();
+    if (next != null) {
+      createSplits(next, levels - 1, splits);
+      splits.add(next);
+      createSplits(next, levels - 1, splits);
     }
   }
 
-  /**
-   * Fork-join task to persist all {@link Dataset#spliterators()} in-memory as {@link
-   * PreSplitDataset}.
-   */
-  private static class PersistTask<T, W extends WindowedValue<T>>
-      extends TransformTask<W, List<List<W>>, Dataset<T>, PersistTask<T, W>> {
-    private final List<W> records = new ArrayList<>();
-
-    PersistTask(List<Spliterator<W>> splits) {
-      super(null, null, splits, 0, splits.size());
-    }
-
-    private PersistTask(
-        @Nullable PersistTask<T, W> parent,
-        @Nullable PersistTask<T, W> next,
-        List<Spliterator<W>> splits,
-        int lo,
-        int hi) {
-      super(parent, next, splits, lo, hi);
+  /** Force evaluation for leaves. */
+  private static class EvalTask<T> extends TransformTask<T, Void, Void> {
+    EvalTask(String name) {
+      super(name);
     }
 
     @Override
-    protected PersistTask<T, W> subTask(
-        PersistTask<T, W> parent,
-        PersistTask<T, W> next,
-        List<Spliterator<W>> splits,
-        int lo,
-        int hi) {
-      return new PersistTask<>(parent, next, splits, lo, hi);
+    protected Void add(@Nullable Void acc, WindowedValue<T> in, int idx) {
+      return null;
     }
 
     @Override
-    protected List<List<W>> add(@Nullable List<List<W>> acc, W wv) {
+    protected Void merge(Void left, Void right) {
+      return null;
+    }
+
+    @Override
+    protected Void getOutput(@Nullable Void acc) {
+      return null;
+    }
+  }
+
+  /** Fork-join task to persist all {@link Dataset#spliterators()} in-memory as {@link Records}. */
+  private static class PersistTask<T>
+      extends TransformTask<T, List<WindowedValue<T>>, Collection<WindowedValue<T>>> {
+
+    PersistTask(String name) {
+      super(name);
+    }
+
+    @Override
+    protected List<WindowedValue<T>> add(
+        @Nullable List<WindowedValue<T>> acc, WindowedValue<T> wv, int idx) {
       if (acc == null) {
         acc = new ArrayList<>();
-        acc.add(records);
       }
-      records.add(wv);
+      acc.add(wv);
       return acc;
     }
 
     @Override
-    protected List<List<W>> merge(List<List<W>> left, List<List<W>> right) {
-      left.addAll(right);
-      return left;
+    protected List<WindowedValue<T>> merge(List<WindowedValue<T>> a, List<WindowedValue<T>> b) {
+      return ConcatList.of(a, b);
     }
 
     @Override
-    protected Dataset<T> getOutput(@Nullable List<List<W>> acc) {
-      return new PreSplitDataset<>(acc != null ? (List) acc : Collections.EMPTY_LIST, true);
-    }
-  }
-
-  /** Adapter from {@link Spliterator} to {@link Iterator}. */
-  private static class SpliteratorAsIterator<T> implements Iterator<T> {
-    private final Spliterator<T> split;
-    private @Nullable T next = null;
-
-    SpliteratorAsIterator(Spliterator<T> split) {
-      this.split = split;
-    }
-
-    @Override
-    public boolean hasNext() {
-      return next != null || split.tryAdvance(v -> next = v);
-    }
-
-    @Override
-    public T next() {
-      if (!hasNext()) {
-        throw new NoSuchElementException();
-      }
-      T current = next;
-      next = null;
-      return current;
+    protected Collection<WindowedValue<T>> getOutput(@Nullable List<WindowedValue<T>> acc) {
+      return acc != null ? acc : EMPTY_LIST;
     }
   }
 }

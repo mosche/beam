@@ -17,9 +17,17 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import static org.apache.beam.sdk.util.WindowedValue.timestampedValueInGlobalWindow;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Spliterator;
+import java.util.function.Consumer;
 import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTranslator;
+import org.apache.beam.runners.local.translation.utils.Spliterable;
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.io.BoundedSource.BoundedReader;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -29,14 +37,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Spliterator;
-import java.util.function.Consumer;
-
-import static org.apache.beam.sdk.util.WindowedValue.timestampedValueInGlobalWindow;
-
+@SuppressWarnings("unused")
 class ReadSourceTranslatorBatch<T>
     extends TransformTranslator<PBegin, PCollection<T>, SplittableParDo.PrimitiveBoundedRead<T>> {
 
@@ -45,22 +46,22 @@ class ReadSourceTranslatorBatch<T>
   @Override
   public void translate(SplittableParDo.PrimitiveBoundedRead<T> transform, Context cxt)
       throws Exception {
-    BoundedSource<T> source = transform.getSource();
     PipelineOptions opts = cxt.getOptions();
+    BoundedSource<T> source = transform.getSource();
     long desiredSize = source.getEstimatedSizeBytes(opts) / (2 ^ cxt.getOptions().getSplits());
 
     List<? extends BoundedSource<T>> splits = source.split(desiredSize, opts);
-    LOG.warn("Reading from {} using {} splits.", transform.getName(), splits.size());
+    LOG.info("Reading from {} using {} splits.", transform.getName(), splits.size());
 
     List<SpliterableSource<T>> spliterators = new ArrayList<>(splits.size());
     for (BoundedSource<T> splitSource : splits) {
       spliterators.add(new SpliterableSource<>(splitSource, opts));
     }
 
-    cxt.putDataset(cxt.getOutput(), Dataset.ofSplits(spliterators));
+    cxt.provideDataset(cxt.getOutput(), Dataset.ofSplits(cxt.fullName(), spliterators));
   }
 
-  private static class SpliterableSource<T> implements Dataset.Spliterable<WindowedValue<T>> {
+  private static class SpliterableSource<T> implements Spliterable<WindowedValue<T>> {
     final BoundedSource<T> source;
     final PipelineOptions options;
 

@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import java.io.Serializable;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
@@ -25,8 +26,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.junit.Rule;
 import org.junit.Test;
-
-import java.io.Serializable;
 
 public class FlattenTest implements Serializable {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());

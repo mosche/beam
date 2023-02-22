@@ -39,7 +39,7 @@ class AssignWindowTranslatorBatch<T>
 
   @Override
   public void translate(Window.Assign<T> transform, Context cxt) {
-    Dataset<T> dataset = cxt.getDataset(cxt.getInput());
-    cxt.putDataset(cxt.getOutput(), dataset);
+    Dataset<T> dataset = cxt.requireDataset(cxt.getInput());
+    cxt.provideDataset(cxt.getOutput(), dataset);
   }
 }

@@ -17,26 +17,29 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
-import org.apache.beam.runners.local.translation.Dataset;
-import org.apache.beam.runners.local.translation.TransformTask;
-import org.apache.beam.runners.local.translation.TransformTranslator;
-import org.apache.beam.sdk.transforms.GroupByKey;
-import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
+import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Collections2.transform;
 
-import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Spliterator;
-
-import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
-import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Collections2.transform;
-import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables.concat;
+import javax.annotation.Nullable;
+import org.apache.beam.runners.local.translation.Dataset;
+import org.apache.beam.runners.local.translation.TransformTask;
+import org.apache.beam.runners.local.translation.TransformTranslator;
+import org.apache.beam.runners.local.translation.utils.ConcatList;
+import org.apache.beam.sdk.coders.KvCoder;
+import org.apache.beam.sdk.coders.RowCoder;
+import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.sdk.transforms.GroupByKey;
+import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.Row;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Converter;
 
 class GroupByKeyTranslatorBatch<K, V>
     extends TransformTranslator<
@@ -44,73 +47,100 @@ class GroupByKeyTranslatorBatch<K, V>
 
   @Override
   public void translate(GroupByKey<K, V> transform, Context cxt) {
-    Dataset<KV<K, V>> dataset = cxt.getDataset(cxt.getInput());
-    cxt.putDataset(cxt.getOutput(), dataset.transform(splits -> new GroupByKeyTask<>(splits)));
+    PCollection<KV<K, V>> input = cxt.getInput();
+    Dataset<KV<K, V>> dataset = cxt.requireDataset(input);
+
+    KvCoder<K, V> coder = (KvCoder<K, V>) input.getCoder();
+    Converter<K, ?> keyFn =
+        (coder.getKeyCoder() instanceof RowCoder)
+            ? RowKeyConverter.of((RowCoder) coder.getKeyCoder())
+            : Converter.identity();
+
+    cxt.provideDataset(
+        cxt.getOutput(), dataset.evaluate(new GroupByKeyTask<>(cxt.fullName(), keyFn)));
   }
 
-  private static class GroupByKeyTask<K, V>
+  private static class GroupByKeyTask<K, KIntT, V>
       extends TransformTask<
-          WindowedValue<KV<K, V>>,
-          Map<K, Iterable<V>>,
-          Collection<WindowedValue<KV<K, Iterable<V>>>>,
-          GroupByKeyTask<K, V>> {
+          KV<K, V>, Map<KIntT, List<V>>, Collection<WindowedValue<KV<K, Iterable<V>>>>> {
+    private final Converter<K, KIntT> keyFn;
 
-    GroupByKeyTask(List<Spliterator<WindowedValue<KV<K, V>>>> splits) {
-      this(null, null, splits, 0, splits.size());
-    }
-
-    private GroupByKeyTask(
-        @Nullable GroupByKeyTask<K, V> parent,
-        @Nullable GroupByKeyTask<K, V> next,
-        List<Spliterator<WindowedValue<KV<K, V>>>> splits,
-        int lo,
-        int hi) {
-      super(parent, next, splits, lo, hi);
+    private GroupByKeyTask(String name, Converter<K, KIntT> keyFn) {
+      super(name);
+      this.keyFn = keyFn;
     }
 
     @Override
-    protected GroupByKeyTask<K, V> subTask(
-        GroupByKeyTask<K, V> parent,
-        GroupByKeyTask<K, V> next,
-        List<Spliterator<WindowedValue<KV<K, V>>>> splits,
-        int lo,
-        int hi) {
-      return new GroupByKeyTask<>(parent, next, splits, lo, hi);
-    }
-
-    @Override
-    protected Map<K, Iterable<V>> add(
-        @Nullable Map<K, Iterable<V>> acc, WindowedValue<KV<K, V>> wv) {
+    protected Map<KIntT, List<V>> add(
+        @Nullable Map<KIntT, List<V>> acc, WindowedValue<KV<K, V>> wv, int idx) {
       if (acc == null) {
         acc = new HashMap<>();
       }
       KV<K, V> kv = wv.getValue();
-      acc.compute(kv.getKey(), (k, v) -> append((List<V>) v, kv.getValue()));
+      KIntT intKey = keyFn.convert(kv.getKey());
+      List<V> perKey = acc.get(intKey);
+      if (perKey == null) {
+        perKey = new ArrayList<>();
+        acc.put(intKey, perKey);
+      }
+      perKey.add(kv.getValue());
       return acc;
     }
 
-    private List<V> append(List<V> list, V value) {
-      if (list == null) {
-        list = new ArrayList<>();
-      }
-      list.add(value);
-      return list;
-    }
-
     @Override
-    protected Map<K, Iterable<V>> merge(Map<K, Iterable<V>> left, Map<K, Iterable<V>> right) {
-      for (Map.Entry<K, Iterable<V>> e : right.entrySet()) {
-        left.compute(e.getKey(), (k, v) -> v != null ? concat(v, e.getValue()) : e.getValue());
+    protected Map<KIntT, List<V>> merge(Map<KIntT, List<V>> left, Map<KIntT, List<V>> right) {
+      if (right.size() > left.size()) {
+        return merge(right, left);
+      }
+      for (Map.Entry<KIntT, List<V>> e : right.entrySet()) {
+        left.compute(e.getKey(), (k, v) -> ConcatList.of(v, e.getValue()));
       }
       return left;
     }
 
     @Override
     protected Collection<WindowedValue<KV<K, Iterable<V>>>> getOutput(
-        @Nullable Map<K, Iterable<V>> acc) {
-      return acc != null
-          ? transform(acc.entrySet(), e -> valueInGlobalWindow(KV.of(e.getKey(), e.getValue())))
-          : Collections.EMPTY_LIST;
+        @Nullable Map<KIntT, List<V>> acc) {
+      if (acc == null) {
+        return Collections.EMPTY_LIST;
+      }
+      Converter<KIntT, K> reverseFn = keyFn.reverse();
+      return transform(
+          acc.entrySet(),
+          e -> valueInGlobalWindow(KV.of(reverseFn.convert(e.getKey()), e.getValue())));
+    }
+  }
+
+  private static class RowKeyConverter extends Converter<Row, List<Object>> {
+    final Schema schema;
+
+    static <K> Converter<K, ?> of(RowCoder coder) {
+      // checkFields(coder.getSchema());
+      return (Converter<K, ?>) new RowKeyConverter(coder.getSchema());
+    }
+
+    //    private static void checkFields(Schema schema) {
+    //      for (Field f : schema.getFields()) {
+    //        checkState(BYTES.equals(f.getType()), "Type BYTES not supported [%s]", f.getName());
+    //        Schema fSchema = f.getType().getRowSchema();
+    //        if (fSchema != null) {
+    //          checkFields(fSchema);
+    //        }
+    //      }
+    //    }
+
+    private RowKeyConverter(Schema schema) {
+      this.schema = schema;
+    }
+
+    @Override
+    protected List<Object> doForward(Row row) {
+      return row.getValues();
+    }
+
+    @Override
+    protected Row doBackward(List<Object> values) {
+      return Row.withSchema(schema).attachValues(values);
     }
   }
 }

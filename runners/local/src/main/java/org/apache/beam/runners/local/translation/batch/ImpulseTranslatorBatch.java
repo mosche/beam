@@ -17,6 +17,8 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
+import static org.apache.beam.repackaged.core.org.apache.commons.lang3.ArrayUtils.EMPTY_BYTE_ARRAY;
+
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTranslator;
 import org.apache.beam.sdk.transforms.Impulse;
@@ -25,14 +27,13 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 
-import static org.apache.beam.repackaged.core.org.apache.commons.lang3.ArrayUtils.EMPTY_BYTE_ARRAY;
-
 class ImpulseTranslatorBatch extends TransformTranslator<PBegin, PCollection<byte[]>, Impulse> {
 
   @Override
   public void translate(Impulse transform, Context cxt) {
     ImmutableList<WindowedValue<byte[]>> impulse =
         ImmutableList.of(WindowedValue.valueInGlobalWindow(EMPTY_BYTE_ARRAY));
-    cxt.putDataset(cxt.getOutput(), Dataset.of(impulse, cxt.getSplits()));
+    cxt.provideDataset(
+        cxt.getOutput(), Dataset.ofRecords(cxt.fullName(), impulse, cxt.getSplits()));
   }
 }

@@ -15,21 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.runners.local.translation.batch;
+package org.apache.beam.runners.local.translation.utils;
 
-import org.apache.beam.runners.local.LocalPipelineOptions;
-import org.apache.beam.runners.local.LocalRunner;
-import org.apache.beam.sdk.testing.TestPipeline;
+import java.util.Iterator;
+import java.util.Spliterator;
 
-class TestOptions {
-  private TestOptions() {}
-
-  static LocalPipelineOptions create() {
-    LocalPipelineOptions opts =
-        TestPipeline.testingPipelineOptions().as(LocalPipelineOptions.class);
-    opts.setRunner(LocalRunner.class);
-    opts.setMetricsEnabled(true);
-    opts.setSplits(1);
-    return opts;
+/**
+ * Spliterable offers a first class {@link Spliterator}. The corresponding {@link Iterator} is
+ * derived from the {@link Spliterator} rather then the other way around.
+ */
+public interface Spliterable<T> extends Iterable<T> {
+  @Override
+  default Iterator<T> iterator() {
+    return Spliterators.asIterator(spliterator());
   }
+
+  @Override
+  Spliterator<T> spliterator();
 }
