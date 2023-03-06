@@ -24,12 +24,12 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Spliterator;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.local.translation.utils.ConcatList;
 import org.apache.beam.runners.local.translation.utils.Spliterable;
 import org.apache.beam.runners.local.translation.utils.Spliterators;
 import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 
 @SuppressWarnings("unused")
@@ -162,6 +162,7 @@ public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
       return createSplits(spliterator(), splitLevels);
     }
 
+    @SuppressWarnings("nullable")
     @Override
     public Spliterator<WindowedValue<T>> spliterator() {
       return Spliterators.concat(Iterables.transform(datasets, ds -> ds.spliterator()));

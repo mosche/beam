@@ -52,10 +52,11 @@ public abstract class TransformTask<InT, AccT, OutT> {
 
   private class ParallelTask extends CountedCompleter<OutT> {
     private final int lo, hi;
-    private ParallelTask forks, next; // record subtask forks in list
+    private @Nullable ParallelTask forks, next = null; // record subtask forks in list
     private @Nullable AccT acc;
     private int counter = 0;
 
+    @SuppressWarnings("argument")
     ParallelTask(@Nullable ParallelTask parent, @Nullable ParallelTask next, int lo, int hi) {
       super(parent);
       this.lo = lo;

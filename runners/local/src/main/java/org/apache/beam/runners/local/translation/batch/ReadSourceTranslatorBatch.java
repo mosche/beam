@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Spliterator;
 import java.util.function.Consumer;
+import javax.annotation.Nullable;
 import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTranslator;
@@ -111,7 +112,7 @@ class ReadSourceTranslatorBatch<T>
       }
 
       @Override
-      public Spliterator<WindowedValue<T>> trySplit() {
+      public @Nullable Spliterator<WindowedValue<T>> trySplit() {
         return null;
       }
 

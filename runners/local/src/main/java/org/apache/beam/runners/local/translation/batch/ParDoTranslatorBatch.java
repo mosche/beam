@@ -175,11 +175,13 @@ class ParDoTranslatorBatch<InT, OutT>
       this.datasets = datasets;
     }
 
+    @SuppressWarnings("methodref.receiver") // not null
     static <ViewT, T> ViewT iterableView(ViewFn<IterableView<T>, ViewT> fn, Dataset<T> ds) {
       Iterable<T> it = Iterables.transform(ds, WindowedValue::getValue);
       return fn.apply(() -> it);
     }
 
+    @SuppressWarnings("methodref.receiver") // not null
     static <K, V, ViewT> ViewT multimapView(
         ViewFn<MultimapView<K, V>, ViewT> fn, Coder<K> coder, Dataset<KV<K, V>> ds) {
       Iterable<KV<K, V>> it = Iterables.transform(ds, WindowedValue::getValue);
@@ -233,6 +235,7 @@ class ParDoTranslatorBatch<InT, OutT>
 
     byte state = CREATED;
 
+    @SuppressWarnings("method.invocation")
     DoFnSpliterator(
         String name,
         Spliterator<WindowedValue<InT>> input,
@@ -252,6 +255,7 @@ class ParDoTranslatorBatch<InT, OutT>
       DoFnInvokers.tryInvokeSetupFor(fn, opts);
     }
 
+    @SuppressWarnings("argument")
     DoFnRunner<InT, OutT> createRunner(
         LocalPipelineOptions opts,
         DoFn<InT, OutT> fn,
@@ -282,7 +286,7 @@ class ParDoTranslatorBatch<InT, OutT>
     }
 
     @Override
-    public Spliterator<WindowedValue<OutT>> trySplit() {
+    public @Nullable Spliterator<WindowedValue<OutT>> trySplit() {
       return null; // if needed, delegate split to input
     }
 

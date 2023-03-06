@@ -26,7 +26,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import javax.annotation.Nullable;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTask;
 import org.apache.beam.runners.local.translation.TransformTranslator;
@@ -40,6 +39,7 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.Row;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Converter;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 class GroupByKeyTranslatorBatch<K, V>
     extends TransformTranslator<
@@ -71,6 +71,7 @@ class GroupByKeyTranslatorBatch<K, V>
     }
 
     @Override
+    @SuppressWarnings({"nullable", "argument"})
     protected Map<KIntT, List<V>> add(
         @Nullable Map<KIntT, List<V>> acc, WindowedValue<KV<K, V>> wv, int idx) {
       if (acc == null) {
@@ -99,6 +100,7 @@ class GroupByKeyTranslatorBatch<K, V>
     }
 
     @Override
+    @SuppressWarnings("nullable")
     protected Collection<WindowedValue<KV<K, Iterable<V>>>> getOutput(
         @Nullable Map<KIntT, List<V>> acc) {
       if (acc == null) {
@@ -111,7 +113,7 @@ class GroupByKeyTranslatorBatch<K, V>
     }
   }
 
-  private static class RowKeyConverter extends Converter<Row, List<Object>> {
+  private static class RowKeyConverter extends Converter<Row, List<@Nullable Object>> {
     final Schema schema;
 
     static <K> Converter<K, ?> of(RowCoder coder) {
@@ -134,12 +136,13 @@ class GroupByKeyTranslatorBatch<K, V>
     }
 
     @Override
-    protected List<Object> doForward(Row row) {
+    protected List<@Nullable Object> doForward(Row row) {
       return row.getValues();
     }
 
     @Override
-    protected Row doBackward(List<Object> values) {
+    @SuppressWarnings("argument")
+    protected Row doBackward(List<@Nullable Object> values) {
       return Row.withSchema(schema).attachValues(values);
     }
   }

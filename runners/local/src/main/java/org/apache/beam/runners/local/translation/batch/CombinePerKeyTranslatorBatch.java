@@ -77,12 +77,15 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
         return merge(right, left);
       }
       for (Entry<K, AccT> e : right.entrySet()) {
-        left.compute(e.getKey(), (k, v) -> fn.mergeAccumulators(ImmutableList.of(v, e.getValue())));
+        AccT acc = e.getValue();
+        left.compute(
+            e.getKey(), (k, v) -> v == null ? acc : fn.mergeAccumulators(ImmutableList.of(v, acc)));
       }
       return left;
     }
 
     @Override
+    @SuppressWarnings("nullable")
     protected Collection<WindowedValue<KV<K, OutT>>> getOutput(@Nullable Map<K, AccT> acc) {
       if (acc == null) {
         return EMPTY_LIST;

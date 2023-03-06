@@ -24,9 +24,11 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Spliterator;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 import org.apache.beam.repackaged.core.org.apache.commons.lang3.RandomUtils;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Function;
+import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
 
 public class Spliterators {
   private Spliterators() {}
@@ -69,6 +71,8 @@ public class Spliterators {
     }
 
     @Override
+    @EnsuresNonNull("next")
+    @SuppressWarnings("contracts") // checker can't know
     public boolean hasNext() {
       return next != null || split.tryAdvance(v -> next = v);
     }
@@ -84,6 +88,7 @@ public class Spliterators {
     }
   }
 
+  @NotThreadSafe
   private static class ConcatSpliterator<T> implements Spliterator<T> {
     private @Nullable Spliterator<T> a;
     private @Nullable Spliterator<T> b;
@@ -112,13 +117,12 @@ public class Spliterators {
     }
 
     @Override
-    public Spliterator<T> trySplit() {
-      if (a == null && b == null) {
-        return null;
+    @SuppressWarnings({"nullable", "argument"}) // poor checker
+    public @Nullable Spliterator<T> trySplit() {
+      if (a == null) {
+        return b != null ? b.trySplit() : null;
       } else if (b == null) {
         return a.trySplit();
-      } else if (a == null) {
-        return b.trySplit();
       }
 
       long aSize = a.estimateSize();
@@ -169,7 +173,7 @@ public class Spliterators {
     }
 
     @Override
-    public Spliterator<T2> trySplit() {
+    public @Nullable Spliterator<T2> trySplit() {
       Spliterator<T1> split = spliterator.trySplit();
       return split != null ? new MapSpliterator<>(split, mapFn) : null;
     }
