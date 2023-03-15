@@ -15,26 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.runners.local.translation.metrics;
+package org.apache.beam.runners.local.translation.dofn;
 
 import java.io.Closeable;
 import java.io.IOException;
 import org.apache.beam.runners.core.DoFnRunner;
+import org.apache.beam.runners.local.translation.dofn.DoFnRunnerFactory.DoFnRunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.state.TimeDomain;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.reflect.DoFnInvokers;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.joda.time.Instant;
 
-public class DoFnRunnerWithMetrics<InputT, OutputT> implements DoFnRunner<InputT, OutputT> {
+class DoFnRunnerWithMetrics<InputT, OutputT> implements DoFnRunnerWithTeardown<InputT, OutputT> {
   private final DoFnRunner<InputT, OutputT> delegate;
   private final MetricsContainer metrics;
 
-  public DoFnRunnerWithMetrics(DoFnRunner<InputT, OutputT> delegate, MetricsContainer metrics) {
+  DoFnRunnerWithMetrics(DoFnRunner<InputT, OutputT> delegate, MetricsContainer metrics) {
     this.delegate = delegate;
     this.metrics = metrics;
+  }
+
+  @Override
+  public void teardown() {
+    DoFnInvokers.invokerFor(delegate.getFn()).invokeTeardown();
   }
 
   @Override

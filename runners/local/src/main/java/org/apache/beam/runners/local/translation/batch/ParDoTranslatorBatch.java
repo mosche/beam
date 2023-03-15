@@ -17,41 +17,29 @@
  */
 package org.apache.beam.runners.local.translation.batch;
 
-import static java.util.Collections.EMPTY_MAP;
-import static org.apache.beam.runners.core.construction.ParDoTranslation.getSchemaInformation;
 import static org.apache.beam.sdk.transforms.Materializations.ITERABLE_MATERIALIZATION_URN;
 import static org.apache.beam.sdk.transforms.Materializations.MULTIMAP_MATERIALIZATION_URN;
 import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
 import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
-import java.util.Spliterator;
-import java.util.function.Consumer;
-import org.apache.beam.runners.core.DoFnRunner;
-import org.apache.beam.runners.core.DoFnRunners;
 import org.apache.beam.runners.core.InMemoryMultimapSideInputView;
 import org.apache.beam.runners.core.SideInputReader;
-import org.apache.beam.runners.core.StateInternals;
-import org.apache.beam.runners.core.StepContext;
-import org.apache.beam.runners.core.TimerInternals;
 import org.apache.beam.runners.local.LocalPipelineOptions;
 import org.apache.beam.runners.local.translation.Dataset;
 import org.apache.beam.runners.local.translation.TransformTranslator;
-import org.apache.beam.runners.local.translation.metrics.DoFnRunnerWithMetrics;
+import org.apache.beam.runners.local.translation.dofn.DoFnRunnerFactory;
+import org.apache.beam.runners.local.translation.dofn.DoFnTransformFn;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.Materializations.IterableView;
 import org.apache.beam.sdk.transforms.Materializations.MultimapView;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.ViewFn;
-import org.apache.beam.sdk.transforms.reflect.DoFnInvokers;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignature;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignatures;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -64,8 +52,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
-import org.apache.beam.sdk.values.WindowingStrategy;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -120,21 +106,14 @@ class ParDoTranslatorBatch<InT, OutT>
 
     LocalPipelineOptions opts = cxt.getOptions();
     MetricsContainer metrics = cxt.getMetricsContainer();
-    DoFn<InT, OutT> fn = transform.getFn();
-    DoFnSchemaInformation schema = getSchemaInformation(cxt.getCurrentTransform());
-    List<TupleTag<?>> additionalOuts = transform.getAdditionalOutputTags().getAll();
-
     SideInputReader sideInputs = createSideInputs(transform.getSideInputs().values(), cxt);
-    String name = cxt.getCurrentTransform().getFullName();
+
+    DoFnRunnerFactory<InT, OutT> factory =
+        DoFnRunnerFactory.simple(cxt.getCurrentTransform(), input, sideInputs);
+    DoFnTransformFn<InT, OutT> transformFn = new DoFnTransformFn<>(opts, metrics, factory);
 
     cxt.provideDataset(
-        cxt.getOutput(mainOut),
-        cxt.requireDataset(input)
-            .transform(
-                cxt.fullName(),
-                s ->
-                    new DoFnSpliterator<>(
-                        name, s, opts, fn, mainOut, additionalOuts, sideInputs, schema, metrics)));
+        cxt.getOutput(mainOut), cxt.requireDataset(input).transform(cxt.fullName(), transformFn));
   }
 
   private <T> SideInputReader createSideInputs(Collection<PCollectionView<?>> views, Context cxt) {
@@ -215,141 +194,6 @@ class ParDoTranslatorBatch<InT, OutT>
     @Override
     public boolean isEmpty() {
       return datasets.isEmpty();
-    }
-  }
-
-  private static class DoFnSpliterator<InT, OutT>
-      implements Spliterator<WindowedValue<OutT>>, DoFnRunners.OutputManager {
-    private static final byte CREATED = 0;
-    private static final byte RUNNING = 1;
-    private static final byte FINISHED = 2;
-
-    private static final StepContext NOOP_STEP_CTX = new NoOpStepContext();
-    final ArrayDeque<WindowedValue<OutT>> buffer = new ArrayDeque<>();
-    final Spliterator<WindowedValue<InT>> input;
-
-    final TupleTag<OutT> mainOut;
-    final int characteristics;
-    final DoFnRunner<InT, OutT> runner;
-    final String name;
-
-    byte state = CREATED;
-
-    @SuppressWarnings("method.invocation")
-    DoFnSpliterator(
-        String name,
-        Spliterator<WindowedValue<InT>> input,
-        LocalPipelineOptions opts,
-        DoFn<InT, OutT> fn,
-        TupleTag<OutT> mainOut,
-        List<TupleTag<?>> additionalOuts,
-        SideInputReader sideInputs,
-        DoFnSchemaInformation doFnSchema,
-        MetricsContainer metrics) {
-      this.name = name;
-      this.input = input;
-      this.mainOut = mainOut;
-      this.characteristics = input.characteristics() & ~Spliterator.SIZED;
-      this.runner =
-          createRunner(opts, fn, mainOut, additionalOuts, sideInputs, doFnSchema, metrics);
-      DoFnInvokers.tryInvokeSetupFor(fn, opts);
-    }
-
-    @SuppressWarnings("argument")
-    DoFnRunner<InT, OutT> createRunner(
-        LocalPipelineOptions opts,
-        DoFn<InT, OutT> fn,
-        TupleTag<OutT> mainOut,
-        List<TupleTag<?>> additionalOuts,
-        SideInputReader sideInputs,
-        DoFnSchemaInformation doFnSchema,
-        MetricsContainer metrics) {
-      DoFnRunner<InT, OutT> runner =
-          DoFnRunners.simpleRunner(
-              opts,
-              fn,
-              sideInputs,
-              this,
-              mainOut,
-              additionalOuts,
-              NOOP_STEP_CTX,
-              null,
-              EMPTY_MAP, // no coders used
-              WindowingStrategy.globalDefault(),
-              doFnSchema,
-              ImmutableMap.of());
-
-      if (opts.isMetricsEnabled()) {
-        runner = new DoFnRunnerWithMetrics<>(runner, metrics);
-      }
-      return runner;
-    }
-
-    @Override
-    public @Nullable Spliterator<WindowedValue<OutT>> trySplit() {
-      return null; // if needed, delegate split to input
-    }
-
-    @Override
-    public boolean tryAdvance(Consumer<? super WindowedValue<OutT>> action) {
-      try {
-        if (state == CREATED) {
-          state = RUNNING;
-          runner.startBundle();
-        }
-        while (true) {
-          if (!buffer.isEmpty()) {
-            WindowedValue<OutT> first = buffer.pollFirst();
-            action.accept(first);
-            return true;
-          }
-          if (input.tryAdvance(wv -> runner.processElement(wv))) {
-            // continue with loop to consume from buffer
-          } else if (state == RUNNING) {
-            state = FINISHED;
-            runner.finishBundle();
-          } else {
-            // FIXME
-            // DoFnInvokers.invokerFor(runner.getFn()).invokeTeardown();
-            return false;
-          }
-        }
-      } catch (RuntimeException e) {
-        // FIXME
-        // DoFnInvokers.invokerFor(runner.getFn()).invokeTeardown();
-        throw e;
-      }
-    }
-
-    @Override
-    public long estimateSize() {
-      return input.estimateSize();
-    }
-
-    @Override
-    public int characteristics() {
-      return characteristics;
-    }
-
-    @Override
-    public <T> void output(TupleTag<T> tag, WindowedValue<T> output) {
-      if (!tag.equals(mainOut)) {
-        return; // discard other tags
-      }
-      buffer.addLast((WindowedValue<OutT>) output);
-    }
-  }
-
-  private static class NoOpStepContext implements StepContext {
-
-    @Override
-    public StateInternals stateInternals() {
-      throw new UnsupportedOperationException("stateInternals is not supported");
-    }
-
-    @Override
-    public TimerInternals timerInternals() {
-      throw new UnsupportedOperationException("timerInternals is not supported");
     }
   }
 }

@@ -57,7 +57,15 @@ public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
   }
 
   public interface TransformFn<T1, T2>
-      extends Function<Spliterator<WindowedValue<T1>>, Spliterator<WindowedValue<T2>>> {}
+      extends Function<Spliterator<WindowedValue<T1>>, Spliterator<WindowedValue<T2>>> {
+    default <T3> TransformFn<T1, T3> fuse(TransformFn<T2, T3> fn) {
+      return t1 -> fn.apply(this.apply(t1));
+    }
+
+    default boolean requiresCollect() {
+      return false;
+    }
+  }
 
   public interface MapFn<T1, T2> extends Function<WindowedValue<T1>, WindowedValue<T2>> {}
 
@@ -153,7 +161,10 @@ public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
 
     @Override
     public <T3> Dataset<T3> transform(String name, TransformFn<T2, T3> fn) {
-      return new Transformed<>(name, dataset, t1 -> fn.apply(this.fn.apply(t1)));
+      if (fn.requiresCollect()) {
+        return new Transformed<>(name, collect(), fn);
+      }
+      return new Transformed<>(name, dataset, this.fn.fuse(fn));
     }
 
     @Override
