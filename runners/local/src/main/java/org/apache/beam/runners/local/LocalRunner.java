@@ -19,7 +19,6 @@ package org.apache.beam.runners.local;
 
 import java.util.List;
 import org.apache.beam.runners.core.construction.PTransformMatchers;
-import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.core.construction.SplittableParDoNaiveBounded;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
@@ -62,7 +61,7 @@ public final class LocalRunner extends PipelineRunner<LocalPipelineResult> {
         PTransformOverride.of(
             PTransformMatchers.splittableParDo(), new SplittableParDo.OverrideFactory<>()),
         PTransformOverride.of(
-            PTransformMatchers.urnEqualTo(PTransformTranslation.SPLITTABLE_PROCESS_KEYED_URN),
+            PTransformMatchers.splittableProcessKeyedBounded(),
             new SplittableParDoNaiveBounded.OverrideFactory<>()));
   }
 }

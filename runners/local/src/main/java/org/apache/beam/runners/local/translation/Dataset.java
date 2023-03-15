@@ -35,11 +35,6 @@ import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterable
 @SuppressWarnings("unused")
 public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
 
-  public static <T, SplitT extends Iterable<WindowedValue<T>>> Dataset<T> ofSplits(
-      String name, List<SplitT> splits) {
-    return new PreSplit<>(name, splits);
-  }
-
   public static <T> Dataset<T> ofRecords(
       String name, List<WindowedValue<T>> records, int splitLevels) {
     return new Records<>(name, records, splitLevels);
@@ -119,36 +114,7 @@ public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
     }
   }
 
-  /** Dataset pre-split into multiple iterables. */
-  private static class PreSplit<T, SplitT extends Iterable<WindowedValue<T>>> extends Dataset<T> {
-    final List<SplitT> splits;
-
-    PreSplit(String name, List<SplitT> splits) {
-      super(name, splits.size());
-      this.splits = splits;
-    }
-
-    @Override
-    public List<Spliterator<WindowedValue<T>>> spliterators() {
-      List<Spliterator<WindowedValue<T>>> spliterators = new ArrayList<>(splits.size());
-      for (SplitT it : splits) {
-        spliterators.add(it.spliterator());
-      }
-      return spliterators;
-    }
-
-    @Override
-    public Spliterator<WindowedValue<T>> spliterator() {
-      return Spliterators.concat(spliterators());
-    }
-
-    @Override
-    public String toString() {
-      return "PreSplit[" + splits.size() + "]";
-    }
-  }
-
-  /** Dataset as union of several datasets, collected as in-memory {@link PreSplit}. */
+  /** Dataset as union of several datasets, collected as in-memory {@link Records}. */
   private static class Union<T> extends Dataset<T> {
     final List<Dataset<T>> datasets;
 
@@ -174,7 +140,7 @@ public abstract class Dataset<T> implements Spliterable<WindowedValue<T>> {
     }
   }
 
-  /** Lazily transformed dataset, collected as in-memory {@link PreSplit}. */
+  /** Lazily transformed dataset, collected as in-memory {@link Records}. */
   private static class Transformed<T1, T2> extends Dataset<T2> {
     final Dataset<T1> dataset;
     final TransformFn<T1, T2> fn;

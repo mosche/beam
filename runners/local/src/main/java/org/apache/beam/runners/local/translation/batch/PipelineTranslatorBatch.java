@@ -19,7 +19,6 @@ package org.apache.beam.runners.local.translation.batch;
 
 import java.util.HashMap;
 import java.util.Map;
-import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.local.translation.PipelineTranslator;
 import org.apache.beam.runners.local.translation.TransformTranslator;
 import org.apache.beam.sdk.annotations.Internal;
@@ -57,7 +56,6 @@ public class PipelineTranslatorBatch extends PipelineTranslator {
     TRANSLATORS.put(Window.Assign.class, new AssignWindowTranslatorBatch<>());
 
     TRANSLATORS.put(ParDo.MultiOutput.class, new ParDoTranslatorBatch<>());
-    TRANSLATORS.put(SplittableParDo.PrimitiveBoundedRead.class, new ReadSourceTranslatorBatch<>());
   }
 
   @Override
