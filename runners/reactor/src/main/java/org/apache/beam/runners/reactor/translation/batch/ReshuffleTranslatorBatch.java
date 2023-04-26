@@ -17,14 +17,13 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import static java.util.function.Function.identity;
-
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
+import java.util.function.Function;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
@@ -40,9 +39,7 @@ class ReshuffleTranslatorBatch<K, V>
 
   @Override
   protected void translate(Reshuffle<K, V> transform, Context cxt) throws IOException {
-    Scheduler scheduler = cxt.getScheduler();
-    int parallelism = cxt.getOptions().getParallelism();
-    cxt.translate(cxt.getOutput(), Dispatcher.regroup(parallelism, scheduler));
+    cxt.translate(cxt.getOutput(), new ReshuffleTranslation<>());
   }
 
   static class ViaRandomKey<V>
@@ -50,109 +47,126 @@ class ReshuffleTranslatorBatch<K, V>
 
     @Override
     protected void translate(Reshuffle.ViaRandomKey<V> transform, Context cxt) throws IOException {
-      int parallelism = cxt.getOptions().getParallelism();
-      Scheduler scheduler = cxt.getScheduler();
-      cxt.<V, V>translate(
-          cxt.getOutput(),
-          f ->
-              f.subscribeOn(scheduler)
-                  .flatMap(identity(), parallelism)
-                  .parallel(parallelism)
-                  .groups());
+      cxt.<V, V>translate(cxt.getOutput(), new RandomReshuffleTranslation<>());
     }
   }
 
-  @SuppressWarnings("rawtypes")
-  private static class Dispatcher<K, V> implements Subscriber<WindowedValue<KV<K, V>>> {
-    private final Scheduler scheduler;
-    private final FluxSink[] sinks;
-    private Subscription subscription;
+  private static class RandomReshuffleTranslation<V> implements Translation<V, V> {
 
-    @SuppressWarnings({"initialization.fields.uninitialized"})
-    Dispatcher(int parallelism, Scheduler scheduler) {
-      this.scheduler = scheduler;
-      this.sinks = new FluxSink[parallelism];
-    }
-
-    static <K, V> Translation<KV<K, V>, KV<K, V>> regroup(int parallelism, Scheduler scheduler) {
-      return f ->
-          f.flatMap(identity(), parallelism)
-              .transform(
-                  flattened -> {
-                    Dispatcher<K, V> dispatcher = new Dispatcher<>(parallelism, scheduler);
-                    flattened.subscribe(dispatcher);
-                    return dispatcher.groupedFlux();
-                  });
-    }
-
-    private Flux<Flux<WindowedValue<KV<K, V>>>> groupedFlux() {
-      AtomicInteger pendingSubscriptions = new AtomicInteger(sinks.length);
-      Flux[] groups = new Flux[sinks.length];
-      for (int idx = 0; idx < sinks.length; idx++) {
-        groups[idx] =
-            Flux.create(new SubscribeOnce(idx, pendingSubscriptions)).subscribeOn(scheduler);
-      }
-      return Flux.just(groups);
+    @Override
+    public Flux<WindowedValue<V>> simple(Flux<WindowedValue<V>> flux) {
+      return flux;
     }
 
     @Override
-    public void onSubscribe(Subscription s) {
-      subscription = s;
+    public Flux<? extends Flux<WindowedValue<V>>> parallel(
+        Flux<? extends Flux<WindowedValue<V>>> flux, int parallelism, Scheduler scheduler) {
+      return flux.subscribeOn(scheduler)
+          .flatMap(Function.identity(), parallelism)
+          .parallel(parallelism)
+          .groups();
     }
+  }
 
-    // FIXME support arrays / rows as key
-    int sinkIdx(WindowedValue<KV<K, V>> wv) {
-      K key = wv.getValue() != null ? wv.getValue().getKey() : null;
-      if (key == null) {
-        return 0;
-      }
-      int rawMod = key.hashCode() % sinks.length;
-      return rawMod + (rawMod < 0 ? sinks.length : 0);
+  private static class ReshuffleTranslation<K, V> implements Translation<KV<K, V>, KV<K, V>> {
+    @Override
+    public Flux<WindowedValue<KV<K, V>>> simple(Flux<WindowedValue<KV<K, V>>> flux) {
+      return flux; // noop
     }
 
     @Override
-    public void onNext(WindowedValue<KV<K, V>> wv) {
-      FluxSink sink = sinks[sinkIdx(wv)];
-      sink.next(wv);
-      subscription.request(1);
+    public Flux<? extends Flux<WindowedValue<KV<K, V>>>> parallel(
+        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, int parallelism, Scheduler scheduler) {
+      return flux.flatMap(Function.identity(), parallelism)
+          .transform(
+              flattened -> {
+                Dispatcher<K, V> dispatcher = new Dispatcher<>(parallelism, scheduler);
+                flattened.subscribe(dispatcher);
+                return dispatcher.groupedFlux();
+              });
     }
 
-    @Override
-    public void onError(Throwable t) {
-      for (int i = 0; i < sinks.length; i++) {
-        sinks[i].error(t);
+    @SuppressWarnings("rawtypes")
+    private static class Dispatcher<K, V> implements Subscriber<WindowedValue<KV<K, V>>> {
+      private final Scheduler scheduler;
+      private final FluxSink[] sinks;
+      private Subscription subscription;
+
+      @SuppressWarnings({"initialization.fields.uninitialized"})
+      Dispatcher(int parallelism, Scheduler scheduler) {
+        this.scheduler = scheduler;
+        this.sinks = new FluxSink[parallelism];
       }
-    }
 
-    @Override
-    public void onComplete() {
-      for (int i = 0; i < sinks.length; i++) {
-        sinks[i].complete();
-      }
-    }
-
-    class SubscribeOnce<T> implements Consumer<FluxSink<T>> {
-      final AtomicBoolean created = new AtomicBoolean(false);
-      final AtomicInteger pendingSinks;
-      final int idx;
-
-      SubscribeOnce(int idx, AtomicInteger pendingSinks) {
-        this.idx = idx;
-        this.pendingSinks = pendingSinks;
+      private Flux<Flux<WindowedValue<KV<K, V>>>> groupedFlux() {
+        AtomicInteger pendingSubscriptions = new AtomicInteger(sinks.length);
+        Flux[] groups = new Flux[sinks.length];
+        for (int idx = 0; idx < sinks.length; idx++) {
+          groups[idx] =
+              Flux.create(new SubscribeOnce(idx, pendingSubscriptions)).subscribeOn(scheduler);
+        }
+        return Flux.just(groups);
       }
 
       @Override
-      public void accept(FluxSink<T> sink) {
-        if (created.compareAndSet(false, true)) {
-          sinks[idx] = sink;
-          // dispose sources if a sink is cancelled
-          sink.onCancel(subscription::cancel);
-          if (pendingSinks.decrementAndGet() == 0) {
-            // once all sinks are connected, signal demand
-            subscription.request(sinks.length);
+      public void onSubscribe(Subscription s) {
+        subscription = s;
+      }
+
+      // FIXME support arrays / rows as key
+      int sinkIdx(WindowedValue<KV<K, V>> wv) {
+        K key = wv.getValue() != null ? wv.getValue().getKey() : null;
+        if (key == null) {
+          return 0;
+        }
+        int rawMod = key.hashCode() % sinks.length;
+        return rawMod + (rawMod < 0 ? sinks.length : 0);
+      }
+
+      @Override
+      public void onNext(WindowedValue<KV<K, V>> wv) {
+        FluxSink sink = sinks[sinkIdx(wv)];
+        sink.next(wv);
+        subscription.request(1);
+      }
+
+      @Override
+      public void onError(Throwable t) {
+        for (int i = 0; i < sinks.length; i++) {
+          sinks[i].error(t);
+        }
+      }
+
+      @Override
+      public void onComplete() {
+        for (int i = 0; i < sinks.length; i++) {
+          sinks[i].complete();
+        }
+      }
+
+      class SubscribeOnce<T> implements Consumer<FluxSink<T>> {
+        final AtomicBoolean created = new AtomicBoolean(false);
+        final AtomicInteger pendingSinks;
+        final int idx;
+
+        SubscribeOnce(int idx, AtomicInteger pendingSinks) {
+          this.idx = idx;
+          this.pendingSinks = pendingSinks;
+        }
+
+        @Override
+        public void accept(FluxSink<T> sink) {
+          if (created.compareAndSet(false, true)) {
+            sinks[idx] = sink;
+            // dispose sources if a sink is cancelled
+            sink.onCancel(subscription::cancel);
+            if (pendingSinks.decrementAndGet() == 0) {
+              // once all sinks are connected, signal demand
+              subscription.request(sinks.length);
+            }
+          } else {
+            throw new UnsupportedOperationException("Only one subscriber allowed");
           }
-        } else {
-          throw new UnsupportedOperationException("Only one subscriber allowed");
         }
       }
     }

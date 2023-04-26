@@ -35,12 +35,8 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
 import org.junit.Rule;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class ParDoTest {
-  private static final Logger LOG = LoggerFactory.getLogger(ParDoTest.class);
-
   @Rule public transient TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
   @Test

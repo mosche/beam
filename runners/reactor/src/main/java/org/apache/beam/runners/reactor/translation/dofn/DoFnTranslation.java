@@ -17,48 +17,46 @@
  */
 package org.apache.beam.runners.reactor.translation.dofn;
 
+import static java.lang.Thread.currentThread;
 import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
-import javax.annotation.Nullable;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.RunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.publisher.Sinks.Many;
 import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation.CanFuse<T1, T2> {
   private static final Logger LOG = LoggerFactory.getLogger(DoFnTranslation.class);
-  private final LocalPipelineOptions opts;
-  private final MetricsContainer metrics;
-  private final Scheduler scheduler;
+  private final @Nullable MetricsContainer metrics;
   private DoFnRunnerFactory<T1, T2> factory;
 
-  public DoFnTranslation(
-      LocalPipelineOptions opts,
-      MetricsContainer metrics,
-      Scheduler scheduler,
-      DoFnRunnerFactory<T1, T2> factory) {
-    this.opts = opts;
+  public DoFnTranslation(DoFnRunnerFactory<T1, T2> factory, @Nullable MetricsContainer metrics) {
     this.metrics = metrics;
-    this.scheduler = scheduler;
     this.factory = factory;
   }
 
   @Override
   public <T0> boolean fuse(@Nullable Translation<T0, T1> prev) {
-    if (opts.isFuseDoFnsEnabled() && prev != null && prev instanceof DoFnTranslation) {
+    if (prev != null && prev instanceof DoFnTranslation) {
       DoFnTranslation<T1, T1> prevDoFn = (DoFnTranslation<T1, T1>) prev; // pretend input is T1
+      if (!prevDoFn.factory.mayFuse()) {
+        return false;
+      }
       factory = prevDoFn.factory.fuse(factory);
       return true;
     }
@@ -66,20 +64,32 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   }
 
   @Override
-  public Flux<? extends Flux<WindowedValue<T2>>> apply(
-      Flux<? extends Flux<WindowedValue<T1>>> flux) {
-    return flux.map(
-        group -> {
-          SinkOutput<T2> out = new SinkOutput<>(); // FIXME Use FluxSink instead?
-          return factory
-              .create(opts, metrics, out)
-              .subscribeOn(scheduler)
-              .flatMapMany(
-                  runner -> {
-                    group.subscribe(new GroupSubscriber<>(runner, out));
-                    return out.sink.asFlux().subscribeOn(scheduler);
-                  });
+  public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux) {
+    SinkOutput<T2> out = new SinkOutput<>(); // FIXME Use FluxSink instead?
+    Mono<RunnerWithTeardown<T1, T2>> mRunner = factory.create(out, metrics);
+    if (LOG.isDebugEnabled()) {
+      mRunner = mRunner.doOnNext(runner -> LOG.debug("{}: created on {}", runner, currentThread()));
+    }
+    return mRunner.flatMapMany(
+        runner -> {
+          flux.subscribe(new GroupSubscriber<>(runner, out));
+          Flux<WindowedValue<T2>> outputFlux = out.sink.asFlux();
+          if (factory.mayFuse()) {
+            return outputFlux;
+          } else {
+            Scheduler pinned = Schedulers.single(Schedulers.parallel());
+            if (LOG.isDebugEnabled()) {
+              pinned.schedule(() -> LOG.debug("{}: publishing SDF on {}", runner, currentThread()));
+            }
+            return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
+          }
         });
+  }
+
+  @Override
+  public Flux<? extends Flux<WindowedValue<T2>>> parallel(
+      Flux<? extends Flux<WindowedValue<T1>>> flux, int parallelism, Scheduler scheduler) {
+    return flux.map(this::simple);
   }
 
   private static class SinkOutput<T2> implements OutputManager {
@@ -107,6 +117,9 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     private final RunnerWithTeardown<T1, T2> runner;
     private Subscription subscription;
 
+    // Track thread used to call DoFn runner
+    private final AtomicReference<@Nullable Thread> pinned = new AtomicReference<>();
+
     @SuppressWarnings({"argument", "initialization.fields.uninitialized"})
     GroupSubscriber(RunnerWithTeardown<T1, T2> runner, SinkOutput<T2> output) {
       this.output = output;
@@ -123,6 +136,16 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     @Override
     public void onNext(WindowedValue<T1> wv) {
       try {
+        Thread current = currentThread();
+        if (pinned.compareAndSet(null, current)) {
+          LOG.debug("{}: startBundle [{}]", runner, current);
+          runner.startBundle();
+        } else if (current != pinned.get()) {
+          LOG.warn("{}: processElement called on {}, expected {}", runner, current, pinned.get());
+          pinned.lazySet(current); // update pinned lazily
+        }
+
+        LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
         runner.processElement(wv);
         // FIXME better manage demand based on downstream requests
         subscription.request(1);

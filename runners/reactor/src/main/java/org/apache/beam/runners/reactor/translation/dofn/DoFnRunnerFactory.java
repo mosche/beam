@@ -22,9 +22,12 @@ import static org.apache.beam.runners.core.construction.ParDoTranslation.getSche
 import static org.apache.beam.sdk.util.SerializableUtils.deserializeFromByteArray;
 import static org.apache.beam.sdk.util.SerializableUtils.serializeToByteArray;
 
+import java.io.Closeable;
+import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
-import javax.annotation.Nullable;
 import org.apache.beam.runners.core.DoFnRunner;
 import org.apache.beam.runners.core.DoFnRunners;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
@@ -32,9 +35,13 @@ import org.apache.beam.runners.core.SideInputReader;
 import org.apache.beam.runners.core.StateInternals;
 import org.apache.beam.runners.core.StepContext;
 import org.apache.beam.runners.core.TimerInternals;
+import org.apache.beam.runners.core.construction.PTransformMatchers;
+import org.apache.beam.runners.core.construction.SplittableParDoNaiveBounded;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.sdk.metrics.MetricsContainer;
+import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.runners.AppliedPTransform;
+import org.apache.beam.sdk.runners.PTransformMatcher;
 import org.apache.beam.sdk.state.TimeDomain;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
@@ -49,15 +56,13 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.joda.time.Instant;
 import reactor.core.publisher.Mono;
 
 public abstract class DoFnRunnerFactory<InT, T> {
-  abstract static class RunnerWithTeardown<InT, T> implements DoFnRunner<InT, T> {
-
-    public void teardown() {
-      DoFnInvokers.invokerFor(getFn()).invokeTeardown();
-    }
+  interface RunnerWithTeardown<InT, T> extends DoFnRunner<InT, T> {
+    void teardown();
   }
 
   /**
@@ -67,7 +72,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
    * {@link DoFnRunner#startBundle()} are already invoked by the factory.
    */
   abstract Mono<RunnerWithTeardown<InT, T>> create(
-      LocalPipelineOptions opts, MetricsContainer metrics, OutputManager output);
+      OutputManager output, @Nullable MetricsContainer metrics);
 
   /**
    * Fuses the factory for the following {@link DoFnRunner} into a single factory that processes
@@ -75,34 +80,53 @@ public abstract class DoFnRunnerFactory<InT, T> {
    */
   abstract <T2> DoFnRunnerFactory<InT, T2> fuse(DoFnRunnerFactory<T, T2> next);
 
+  /**
+   * If this factory is allowed to fuse with another one. We don't want to ever fuse anything onto a
+   * splittable DoFn.
+   */
+  abstract boolean mayFuse();
+
   // FIXME remove input? We shouldn't need the input coder.
   public static <InT, T> DoFnRunnerFactory<InT, T> simple(
+      LocalPipelineOptions opts,
       AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
       PCollection<InT> input,
       Mono<SideInputReader> sideInputReader) {
-    return new SimpleFactory<>(appliedPT, input, sideInputReader);
+    return new SimpleFactory<>(opts, appliedPT, input, sideInputReader);
   }
 
   private static class SimpleFactory<InT, T> extends DoFnRunnerFactory<InT, T> {
+    private static final PTransformMatcher SPLITTABLE_MATCHER =
+        PTransformMatchers.parDoWithFnType(SplittableParDoNaiveBounded.NaiveProcessFn.class);
+
+    final AtomicInteger nextId = new AtomicInteger();
+    final LocalPipelineOptions opts;
     final ParDo.MultiOutput<InT, T> transform;
+    final boolean mayFuse;
     final DoFnSchemaInformation schemaInformation;
-    final @Nullable byte[] serializedDoFn;
+    final byte @Nullable [] serializedDoFn;
     final PCollection<InT> input;
     final Mono<SideInputReader> sideInputs;
 
     SimpleFactory(
+        LocalPipelineOptions opts,
         AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
         PCollection<InT> input,
         Mono<SideInputReader> sideInputs) {
+      this.opts = opts;
       this.transform = appliedPT.getTransform();
       this.serializedDoFn =
-          requiresCopy(transform.getFn()) ? serializeToByteArray(transform.getFn()) : null;
+          requiresCopy(opts, transform.getFn()) ? serializeToByteArray(transform.getFn()) : null;
       this.schemaInformation = getSchemaInformation(appliedPT);
       this.input = input;
-      this.sideInputs = sideInputs;
+      this.sideInputs = opts.getParallelism() > 1 ? sideInputs.cache() : sideInputs;
+      this.mayFuse = !SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
 
-    private static boolean requiresCopy(DoFn<?, ?> fn) {
+    private static boolean requiresCopy(LocalPipelineOptions opts, DoFn<?, ?> fn) {
+      if (opts.getParallelism() == 1) {
+        return false;
+      }
       DoFnSignature sig = DoFnSignatures.signatureForDoFn(fn);
       return sig.startBundle() != null
           || sig.finishBundle() != null
@@ -111,29 +135,33 @@ public abstract class DoFnRunnerFactory<InT, T> {
           || sig.usesState();
     }
 
-    private DoFn<InT, T> doFn() {
+    private DoFn<InT, T> getDoFnInstance() {
       return serializedDoFn != null
           ? (DoFn<InT, T>) deserializeFromByteArray(serializedDoFn, "DoFn")
           : transform.getFn();
     }
 
     @Override
+    boolean mayFuse() {
+      return mayFuse;
+    }
+
+    @Override
     Mono<RunnerWithTeardown<InT, T>> create(
-        LocalPipelineOptions opts, MetricsContainer metrics, OutputManager output) {
-      return sideInputs.map(resolved -> create(resolved, opts, metrics, output));
+        OutputManager output, @Nullable MetricsContainer metrics) {
+      return sideInputs.map(resolved -> create(resolved, output, metrics));
     }
 
     private RunnerWithTeardown<InT, T> create(
         SideInputReader resolvedSideInputs,
-        LocalPipelineOptions opts,
-        MetricsContainer metrics,
-        OutputManager output) {
+        OutputManager output,
+        @Nullable MetricsContainer metrics) {
       List<TupleTag<?>> additionalOuts = transform.getAdditionalOutputTags().getAll();
       TupleTag<T> mainOut = transform.getMainOutputTag();
-      DoFnRunner<InT, T> simpleRunner =
+      DoFnRunner<InT, T> runner =
           DoFnRunners.simpleRunner(
               opts,
-              doFn(),
+              getDoFnInstance(),
               resolvedSideInputs,
               additionalOuts.isEmpty() ? output : new FilteredOutput(output, mainOut),
               mainOut,
@@ -144,21 +172,9 @@ public abstract class DoFnRunnerFactory<InT, T> {
               WindowingStrategy.globalDefault(),
               schemaInformation,
               ImmutableMap.of());
-
-      RunnerWithTeardown<InT, T> runner =
-          opts.isMetricsEnabled()
-              ? new DoFnRunnerWithMetrics<>(simpleRunner, metrics)
-              : new Delegate<>(simpleRunner);
-
       // Invoke setup and then startBundle before returning the runner
       DoFnInvokers.tryInvokeSetupFor(runner.getFn(), opts);
-      try {
-        runner.startBundle();
-      } catch (RuntimeException re) {
-        runner.teardown();
-        throw re;
-      }
-      return runner;
+      return new MetricsRunner<>(runner, transform, nextId.incrementAndGet(), metrics);
     }
 
     @Override
@@ -206,14 +222,17 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
 
     @Override
+    boolean mayFuse() {
+      return factories.get(factories.size() - 1).mayFuse();
+    }
+
+    @Override
     @SuppressWarnings("rawtypes")
-    Mono<RunnerWithTeardown<InT, T>> create(
-        LocalPipelineOptions opts, MetricsContainer metrics, OutputManager out) {
+    Mono<RunnerWithTeardown<InT, T>> create(OutputManager out, @Nullable MetricsContainer metrics) {
       int size = factories.size();
-      // FIXME does this need a scheduler?
       Mono<RunnerWithTeardown[]> runners = Mono.just(new RunnerWithTeardown[size]);
       for (int pos = size - 1; pos >= 0; pos--) {
-        runners = runners.flatMap(new InitRunner(pos, opts, metrics, out));
+        runners = runners.flatMap(new InitRunner(pos, out, metrics));
       }
       return runners.map(FusedRunner::new);
     }
@@ -222,13 +241,11 @@ public abstract class DoFnRunnerFactory<InT, T> {
     @SuppressWarnings("rawtypes")
     private class InitRunner implements Function<RunnerWithTeardown[], Mono<RunnerWithTeardown[]>> {
       final int pos;
-      final LocalPipelineOptions opts;
-      final MetricsContainer metrics;
       final OutputManager out;
+      final @Nullable MetricsContainer metrics;
 
-      InitRunner(int pos, LocalPipelineOptions opts, MetricsContainer metrics, OutputManager out) {
+      InitRunner(int pos, OutputManager out, @Nullable MetricsContainer metrics) {
         this.pos = pos;
-        this.opts = opts;
         this.metrics = metrics;
         this.out = out;
       }
@@ -237,14 +254,8 @@ public abstract class DoFnRunnerFactory<InT, T> {
       public Mono<RunnerWithTeardown[]> apply(RunnerWithTeardown[] runners) {
         // Last runner uses output, every other one fuses it's output directly into the next runner
         OutputManager out = pos + 1 < runners.length ? new FusedOut(runners[pos + 1]) : this.out;
-        return factories
-            .get(pos)
-            .create(opts, metrics, out)
-            .map(
-                runner -> {
-                  runners[pos] = runner;
-                  return runners;
-                });
+        Mono<? extends RunnerWithTeardown<?, ?>> runner = factories.get(pos).create(out, metrics);
+        return runner.doOnNext(r -> runners[pos] = r).thenReturn(runners);
       }
     }
 
@@ -262,11 +273,16 @@ public abstract class DoFnRunnerFactory<InT, T> {
       }
     }
 
-    private static class FusedRunner<InT, T> extends RunnerWithTeardown<InT, T> {
+    private static class FusedRunner<InT, T> implements RunnerWithTeardown<InT, T> {
       final RunnerWithTeardown<?, ?>[] runners;
 
       FusedRunner(RunnerWithTeardown<?, ?>[] runners) {
         this.runners = runners;
+      }
+
+      @Override
+      public String toString() {
+        return Arrays.toString(runners);
       }
 
       @Override
@@ -319,38 +335,85 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
   }
 
-  private static class Delegate<InT, T> extends RunnerWithTeardown<InT, T> {
-    private final DoFnRunner<InT, T> runner;
+  private static class MetricsRunner<InputT, OutputT>
+      implements DoFnRunnerFactory.RunnerWithTeardown<InputT, OutputT> {
+    private static final Closeable NOOP = () -> {};
+    private final DoFnRunner<InputT, OutputT> runner;
+    private final ParDo.MultiOutput<InputT, OutputT> transform;
+    private final int id;
+    private final @Nullable MetricsContainer metrics;
 
-    Delegate(DoFnRunner<InT, T> runner) {
+    MetricsRunner(
+        DoFnRunner<InputT, OutputT> runner,
+        ParDo.MultiOutput<InputT, OutputT> transform,
+        int id,
+        @Nullable MetricsContainer metrics) {
       this.runner = runner;
+      this.transform = transform;
+      this.id = id;
+      this.metrics = metrics;
+    }
+
+    @Override
+    public String toString() {
+      return "Runner[" + transform.getName() + "," + id + "]";
+    }
+
+    @Override
+    public DoFn<InputT, OutputT> getFn() {
+      return runner.getFn();
+    }
+
+    private Closeable scopedMetricsContainer() {
+      return metrics != null ? MetricsEnvironment.scopedMetricsContainer(metrics) : NOOP;
     }
 
     @Override
     public void startBundle() {
-      runner.startBundle();
+      try (Closeable ignored = scopedMetricsContainer()) {
+        try {
+          runner.startBundle();
+        } catch (RuntimeException re) {
+          teardown();
+          throw re;
+        }
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
     }
 
     @Override
-    public void processElement(WindowedValue<InT> elem) {
-      runner.processElement(elem);
+    public void processElement(final WindowedValue<InputT> elem) {
+      try (Closeable ignored = scopedMetricsContainer()) {
+        runner.processElement(elem);
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
     }
 
     @Override
     public <KeyT> void onTimer(
-        String timerId,
-        String timerFamilyId,
+        final String timerId,
+        final String timerFamilyId,
         KeyT key,
-        BoundedWindow window,
-        Instant timestamp,
-        Instant outputTimestamp,
-        TimeDomain timeDomain) {
-      runner.onTimer(timerId, timerFamilyId, key, window, timestamp, outputTimestamp, timeDomain);
+        final BoundedWindow window,
+        final Instant timestamp,
+        final Instant outputTimestamp,
+        final TimeDomain timeDomain) {
+      try (Closeable ignored = scopedMetricsContainer()) {
+        runner.onTimer(timerId, timerFamilyId, key, window, timestamp, outputTimestamp, timeDomain);
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
     }
 
     @Override
     public void finishBundle() {
-      runner.finishBundle();
+      try (Closeable ignored = scopedMetricsContainer()) {
+        runner.finishBundle();
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
     }
 
     @Override
@@ -359,8 +422,8 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
 
     @Override
-    public DoFn<InT, T> getFn() {
-      return runner.getFn();
+    public void teardown() {
+      DoFnInvokers.invokerFor(getFn()).invokeTeardown();
     }
   }
 

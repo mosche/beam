@@ -29,12 +29,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation.CanFuse;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.annotations.Internal;
@@ -42,7 +40,6 @@ import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.runners.TransformHierarchy.Node;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.View;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
@@ -51,8 +48,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 @Internal
@@ -76,18 +71,10 @@ public abstract class PipelineTranslator {
     return translator.completion;
   }
 
-  public interface Translation<T1, T2>
-      extends Function<
-          Flux<? extends Flux<WindowedValue<T1>>>, Flux<? extends Flux<WindowedValue<T2>>>> {
-    interface CanFuse<T1, T2> extends Translation<T1, T2> {
-      <T0> boolean fuse(@Nullable Translation<T0, T1> prev);
-    }
-  }
-
   private static final class TranslationResult<T1, T2> {
     private @Nullable PCollection<T1> mainIn;
     private final Set<PTransform<?, ?>> requiredBy = new HashSet<>();
-    private @MonotonicNonNull Flux<? extends Flux<WindowedValue<T2>>> publisher = null;
+    private @MonotonicNonNull Dataset<T2, ?> dataset = null;
     private @Nullable Translation<T1, T2> translation = null;
 
     TranslationResult(@Nullable PCollection<T1> mainIn) {
@@ -97,9 +84,9 @@ public abstract class PipelineTranslator {
 
   /** Shared, mutable state during the translation of a pipeline. */
   public interface TranslationState {
-    <T> void provide(PCollection<T> pCollection, Flux<? extends Flux<WindowedValue<T>>> publisher);
+    <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset);
 
-    <T> Flux<? extends Flux<WindowedValue<T>>> require(PCollection<T> pCollection);
+    <T> Dataset<T, ?> require(PCollection<T> pCollection);
 
     <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> translation);
 
@@ -163,6 +150,7 @@ public abstract class PipelineTranslator {
       AppliedPTransform<InT, OutT, PTransform<InT, OutT>> appliedTransform =
           (AppliedPTransform) node.toAppliedPTransform(getPipeline());
       try {
+        LOG.debug("Translating {}", appliedTransform.getFullName());
         translator.translate(transform, appliedTransform, this);
       } catch (Exception e) {
         LOG.error("Error during pipeline translation", e);
@@ -175,27 +163,25 @@ public abstract class PipelineTranslator {
       return (TranslationResult<T1, T2>) checkStateNotNull(translationResults.get(pCollection));
     }
 
-    private <T1, T2> Flux<? extends Flux<WindowedValue<T2>>> getOrBuildPublisher(
-        TranslationResult<T1, T2> res) {
-      if (res.publisher == null) {
+    private <T1, T2> Dataset<T2, ?> getOrBuildDataset(TranslationResult<T1, T2> res) {
+      if (res.dataset == null) {
         Translation<T1, T2> fn = checkStateNotNull(res.translation);
         PCollection<T1> input = checkStateNotNull(res.mainIn);
         // FIXME discard input if no more usage
-        res.publisher = checkStateNotNull((Flux) getResult(input).publisher).transform(fn);
+        res.dataset = checkStateNotNull(getResult(input).dataset).transform(fn);
         res.translation = null;
       }
-      return res.publisher;
+      return res.dataset;
     }
 
     @Override
-    public <T> void provide(
-        PCollection<T> pCollection, Flux<? extends Flux<WindowedValue<T>>> publisher) {
-      getResult(pCollection).publisher = publisher;
+    public <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset) {
+      getResult(pCollection).dataset = dataset;
     }
 
     @Override
-    public <T> Flux<? extends Flux<WindowedValue<T>>> require(PCollection<T> pCollection) {
-      return getOrBuildPublisher(getResult(pCollection));
+    public <T> Dataset<T, ?> require(PCollection<T> pCollection) {
+      return getOrBuildDataset(getResult(pCollection));
     }
 
     @Override
@@ -205,37 +191,33 @@ public abstract class PipelineTranslator {
 
       current.translation = fn;
 
-      if (fn instanceof CanFuse && ((CanFuse<T1, T2>) fn).fuse(prev.translation)) {
+      if (fn instanceof Translation.CanFuse
+          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation)) {
         PCollection<T1> prevIn = checkStateNotNull(prev.mainIn);
         current.mainIn = prevIn; // update the input
         // FIXME Why is this causing trouble?
         // translationResults.remove(prevIn); // fused prev into current, drop it
       } else {
-        getOrBuildPublisher(prev); // make sure the publisher for prev is build
+        getOrBuildDataset(prev); // make sure the publisher for prev is build
       }
 
       if (current.requiredBy.isEmpty()) {
-        evaluateLeaf(getOrBuildPublisher(current));
+        evaluateLeaf(getOrBuildDataset(current));
       } else if (current.requiredBy.size() > 1) {
-        Flux<? extends Flux<WindowedValue<T2>>> publisher = getOrBuildPublisher(current);
+        Dataset<T2, ?> dataset = getOrBuildDataset(current);
         if (options.isCacheEnabled()) {
-          current.publisher = cache(publisher);
+          dataset.cache();
         }
       }
     }
 
-    private <T> Flux<? extends Flux<T>> cache(Flux<? extends Flux<T>> flux) {
-      return flux.map(f -> f.cache()).cache();
-    }
-
-    private void evaluateLeaf(Flux<? extends Flux<?>> flux) {
+    private void evaluateLeaf(Dataset<?, ?> ds) {
       if (completion.isDone()) {
         return; // already completed exceptionally or cancelled
       }
-      // Increment pending leaves and start evaluation of leaf flux.
+      // Increment pending leaves and start evaluation.
       pendingLeaves.incrementAndGet();
-      Mono<Long> leaf = flux.flatMap(f -> f.count()).count();
-      leaves.add(leaf.subscribe(null, onError, onComplete));
+      leaves.add(ds.evaluate(onError, onComplete));
     }
 
     @Override

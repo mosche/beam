@@ -17,8 +17,8 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.util.WindowedValue;
@@ -33,20 +33,14 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
   @Override
   protected void translate(Combine.Globally<InT, OutT> transform, Context cxt) {
     CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) transform.getFn();
-    Scheduler scheduler = cxt.getScheduler();
-    int parallelism = cxt.getOptions().getParallelism();
-    cxt.translate(cxt.getOutput(), new TranslateCombineGlobally<>(fn, scheduler, parallelism));
+    cxt.translate(cxt.getOutput(), new TranslateCombineGlobally<>(fn));
   }
 
   private static class TranslateCombineGlobally<InT, AccT, OutT> implements Translation<InT, OutT> {
     final CombineFn<InT, AccT, OutT> fn;
-    final Scheduler scheduler;
-    final int parallelism;
 
-    TranslateCombineGlobally(CombineFn<InT, AccT, OutT> fn, Scheduler scheduler, int parallelism) {
+    TranslateCombineGlobally(CombineFn<InT, AccT, OutT> fn) {
       this.fn = fn;
-      this.scheduler = scheduler;
-      this.parallelism = parallelism;
     }
 
     private AccT add(AccT acc, WindowedValue<InT> wv) {
@@ -54,7 +48,16 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     }
 
     @Override
-    public Flux<Flux<WindowedValue<OutT>>> apply(Flux<? extends Flux<WindowedValue<InT>>> flux) {
+    public Flux<WindowedValue<OutT>> simple(Flux<WindowedValue<InT>> flux) {
+      return flux.reduce(fn.createAccumulator(), this::add)
+          .map(fn::extractOutput)
+          .map(WindowedValue::valueInGlobalWindow)
+          .flux();
+    }
+
+    @Override
+    public Flux<Flux<WindowedValue<OutT>>> parallel(
+        Flux<? extends Flux<WindowedValue<InT>>> flux, int parallelism, Scheduler scheduler) {
       Flux<WindowedValue<OutT>> global =
           flux.subscribeOn(scheduler)
               .flatMap(f -> f.reduce(fn.createAccumulator(), this::add), parallelism)

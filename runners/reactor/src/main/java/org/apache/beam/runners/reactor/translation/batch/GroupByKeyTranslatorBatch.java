@@ -23,8 +23,8 @@ import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.I
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.RowCoder;
 import org.apache.beam.sdk.schemas.Schema;
@@ -51,24 +51,17 @@ class GroupByKeyTranslatorBatch<K, V>
         (coder.getKeyCoder() instanceof RowCoder)
             ? RowKeyConverter.of((RowCoder) coder.getKeyCoder())
             : Converter.identity();
-
-    int parallelism = cxt.getOptions().getParallelism();
-    Scheduler scheduler = cxt.getScheduler();
-    cxt.translate(cxt.getOutput(), new TranslateGroupByKey<>(keyFn, scheduler, parallelism));
+    cxt.translate(cxt.getOutput(), new TranslateGroupByKey<>(keyFn));
   }
 
   private static class TranslateGroupByKey<K, KIntT, V>
       implements Translation<KV<K, V>, KV<K, Iterable<V>>> {
-    final int parallelism;
-    final Scheduler scheduler;
     final Function<WindowedValue<KV<K, V>>, KIntT> keyMapper;
     final Function<WindowedValue<KV<K, V>>, V> valueMapper;
     final Converter<K, KIntT> keyFn;
 
     @SuppressWarnings("nullness")
-    TranslateGroupByKey(Converter<K, KIntT> keyFn, Scheduler scheduler, int parallelism) {
-      this.parallelism = parallelism;
-      this.scheduler = scheduler;
+    TranslateGroupByKey(Converter<K, KIntT> keyFn) {
       this.keyFn = keyFn;
       keyMapper = wv -> keyFn.convert(wv.getValue().getKey());
       valueMapper = wv -> wv.getValue().getValue();
@@ -85,15 +78,22 @@ class GroupByKeyTranslatorBatch<K, V>
     }
 
     @Override
-    public Flux<? extends Flux<WindowedValue<KV<K, Iterable<V>>>>> apply(
-        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux) {
+    public Flux<WindowedValue<KV<K, Iterable<V>>>> simple(Flux<WindowedValue<KV<K, V>>> flux) {
+      return flux.collectMultimap(keyMapper, valueMapper)
+          .flatMapIterable(Map::entrySet)
+          .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())));
+    }
+
+    @Override
+    public Flux<? extends Flux<WindowedValue<KV<K, Iterable<V>>>>> parallel(
+        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, int parallelism, Scheduler scheduler) {
       Flux<Map<KIntT, Iterable<V>>> maps =
           flux.subscribeOn(scheduler)
               .flatMap(group -> (Mono) group.collectMultimap(keyMapper, valueMapper), parallelism);
       return maps.reduce(this::merge)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())))
-          .parallel(parallelism) // FIXME or skip this as there might be a reshuffle anyways?
+          .parallel(parallelism)
           .runOn(scheduler)
           .groups();
     }

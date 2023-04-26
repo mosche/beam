@@ -58,7 +58,6 @@ import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
 
 class ParDoTranslatorBatch<InT, OutT>
     extends TransformTranslator<
@@ -109,41 +108,31 @@ class ParDoTranslatorBatch<InT, OutT>
     PCollection<InT> input = (PCollection<InT>) cxt.getInput();
 
     LocalPipelineOptions opts = cxt.getOptions();
-    Scheduler scheduler = cxt.getScheduler();
-    MetricsContainer metrics = cxt.getMetricsContainer();
-    Collection<PCollectionView<?>> views = transform.getSideInputs().values();
+    MetricsContainer metrics = opts.isMetricsEnabled() ? cxt.getMetricsContainer() : null;
+    Mono<SideInputReader> sideInReader = sideInputReader(transform.getSideInputs().values(), cxt);
     DoFnRunnerFactory<InT, OutT> factory =
-        DoFnRunnerFactory.simple(cxt.getCurrentTransform(), input, sideInputReader(views, cxt));
+        DoFnRunnerFactory.simple(opts, cxt.getCurrentTransform(), input, sideInReader);
 
-    cxt.translate(cxt.getOutput(mainOut), new DoFnTranslation<>(opts, metrics, scheduler, factory));
+    cxt.translate(cxt.getOutput(mainOut), new DoFnTranslation<>(factory, metrics));
   }
 
   private <T> Mono<SideInputReader> sideInputReader(
       Collection<@NonNull PCollectionView<?>> views, Context cxt) {
-    int parallelism = cxt.getOptions().getParallelism();
-    Scheduler scheduler = cxt.getScheduler();
-
     if (views.isEmpty()) {
-      return Mono.just(EmptyReader.INSTANCE).subscribeOn(scheduler);
+      return Mono.just(EmptyReader.INSTANCE);
     }
-
     Iterable<Mono<KV<TupleTag<?>, Iterable<WindowedValue<T>>>>> collectedViews =
-        transform(views, view -> sideInput(checkStateNotNull(view), parallelism, cxt));
-
+        transform(views, view -> sideInput(checkStateNotNull(view), cxt));
     return Flux.concat(collectedViews)
-        .subscribeOn(scheduler)
         .<TupleTag<?>, Iterable<WindowedValue<T>>>collectMap(KV::getKey, KV::getValue)
-        .map(viewsAsMap -> (SideInputReader) new GlobalSideInputReader<>(viewsAsMap))
-        .cache();
+        .map(GlobalSideInputReader::new);
   }
 
   private <T> Mono<KV<TupleTag<?>, Iterable<WindowedValue<T>>>> sideInput(
-      PCollectionView<?> view, int parallelism, Context cxt) {
+      PCollectionView<?> view, Context cxt) {
     PCollection<T> pCol = checkStateNotNull((PCollection<T>) view.getPCollection());
     return cxt.require(pCol)
-        .subscribeOn(cxt.getScheduler())
-        .flatMap(f -> f, parallelism)
-        .collectList()
+        .collect()
         .map(it -> KV.of(view.getTagInternal(), firstNonNull(it, EMPTY_LIST)));
   }
 

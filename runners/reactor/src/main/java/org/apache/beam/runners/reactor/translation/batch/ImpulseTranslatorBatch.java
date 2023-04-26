@@ -17,21 +17,16 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import static org.apache.beam.repackaged.core.org.apache.commons.lang3.ArrayUtils.EMPTY_BYTE_ARRAY;
-import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
-
+import org.apache.beam.runners.reactor.translation.Dataset;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.sdk.transforms.Impulse;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
-import reactor.core.publisher.Flux;
 
 class ImpulseTranslatorBatch extends TransformTranslator<PBegin, PCollection<byte[]>, Impulse> {
 
   @Override
   public void translate(Impulse transform, Context cxt) {
-    Flux<WindowedValue<byte[]>> impulse = Flux.just(valueInGlobalWindow(EMPTY_BYTE_ARRAY));
-    cxt.provide(cxt.getOutput(), Flux.just(impulse.subscribeOn(cxt.getScheduler())));
+    cxt.provide(cxt.getOutput(), Dataset.impulse());
   }
 }

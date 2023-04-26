@@ -18,6 +18,7 @@
 package org.apache.beam.runners.reactor.translation.batch;
 
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.util.IdentityWindowFn;
@@ -38,6 +39,6 @@ class AssignWindowTranslatorBatch<T>
 
   @Override
   public void translate(Window.Assign<T> transform, Context cxt) {
-    cxt.<T, T>translate(cxt.getOutput(), t -> t);
+    cxt.translate(cxt.getOutput(), Translation.identity());
   }
 }

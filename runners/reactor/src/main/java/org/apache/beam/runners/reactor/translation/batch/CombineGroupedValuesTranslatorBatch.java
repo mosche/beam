@@ -18,8 +18,8 @@
 package org.apache.beam.runners.reactor.translation.batch;
 
 import java.io.IOException;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.transforms.CombineWithContext;
@@ -27,6 +27,7 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Scheduler;
 
 class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
     extends TransformTranslator<
@@ -64,9 +65,16 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
     }
 
     @Override
-    public Flux<Flux<WindowedValue<KV<K, OutT>>>> apply(
-        Flux<? extends Flux<WindowedValue<KV<K, Iterable<InT>>>>> flux) {
-      return flux.map(gf -> gf.map(this::reduce));
+    public Flux<WindowedValue<KV<K, OutT>>> simple(Flux<WindowedValue<KV<K, Iterable<InT>>>> flux) {
+      return flux.map(this::reduce);
+    }
+
+    @Override
+    public Flux<Flux<WindowedValue<KV<K, OutT>>>> parallel(
+        Flux<? extends Flux<WindowedValue<KV<K, Iterable<InT>>>>> flux,
+        int parallelism,
+        Scheduler scheduler) {
+      return flux.map(this::simple);
     }
   }
 }

@@ -24,17 +24,14 @@ import java.util.Map;
 import org.apache.beam.runners.core.construction.TransformInputs;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
 import org.apache.beam.sdk.annotations.Internal;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
-import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Scheduler;
 
 @Internal
@@ -79,10 +76,6 @@ public abstract class TransformTranslator<
       this.state = state;
     }
 
-    public String fullName() {
-      return transform.getFullName();
-    }
-
     public InT getInput() {
       return (InT) getOnlyElement(TransformInputs.nonAdditionalInputs(transform));
     }
@@ -118,13 +111,12 @@ public abstract class TransformTranslator<
     }
 
     @Override
-    public <T> void provide(
-        PCollection<T> pCollection, Flux<? extends Flux<WindowedValue<T>>> publisher) {
-      state.provide(pCollection, publisher);
+    public <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset) {
+      state.provide(pCollection, dataset);
     }
 
     @Override
-    public <T> Flux<? extends Flux<WindowedValue<T>>> require(PCollection<T> pCollection) {
+    public <T> Dataset<T, ?> require(PCollection<T> pCollection) {
       return state.require(pCollection);
     }
 

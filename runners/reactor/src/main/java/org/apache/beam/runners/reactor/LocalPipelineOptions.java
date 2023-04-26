@@ -30,16 +30,11 @@ public interface LocalPipelineOptions extends PipelineOptions {
   void setMetricsEnabled(boolean enable);
 
   @Default.Boolean(true)
-  boolean isFuseDoFnsEnabled();
-
-  void setFuseDoFnsEnabled(boolean fuseDoFns);
-
-  @Default.Boolean(true)
   boolean isCacheEnabled();
 
   void setCacheEnabled(boolean cacheEnabled);
 
-  @Default.Integer(4)
+  @Default.Integer(1)
   int getParallelism();
 
   void setParallelism(int parallelism);

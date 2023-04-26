@@ -22,8 +22,8 @@ import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
-import org.apache.beam.runners.reactor.translation.PipelineTranslator.Translation;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
+import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.util.WindowedValue;
@@ -41,9 +41,7 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
   @Override
   public void translate(Combine.PerKey<K, InT, OutT> transform, Context cxt) {
     CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) transform.getFn();
-    Scheduler scheduler = cxt.getScheduler();
-    int parallelism = cxt.getOptions().getParallelism();
-    cxt.translate(cxt.getOutput(), new TranslateCombine<>(fn, scheduler, parallelism));
+    cxt.translate(cxt.getOutput(), new TranslateCombine<>(fn));
   }
 
   // FIXME must also use rowconverter
@@ -51,24 +49,29 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
   private static class TranslateCombine<K, InT, AccT, OutT>
       implements Translation<KV<K, InT>, KV<K, OutT>> {
     final CombineFn<InT, AccT, OutT> fn;
-    final int parallelism;
-    final Scheduler scheduler;
 
-    TranslateCombine(CombineFn<InT, AccT, OutT> fn, Scheduler scheduler, int parallelism) {
-      this.parallelism = parallelism;
-      this.scheduler = scheduler;
+    TranslateCombine(CombineFn<InT, AccT, OutT> fn) {
       this.fn = fn;
     }
 
     @Override
-    public Flux<? extends Flux<WindowedValue<KV<K, OutT>>>> apply(
-        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux) {
+    public Flux<WindowedValue<KV<K, OutT>>> simple(Flux<WindowedValue<KV<K, InT>>> flux) {
+      return flux.reduceWith(HashMap::new, this::add)
+          .flatMapIterable(Map::entrySet)
+          .map(e -> valueInGlobalWindow(KV.of(e.getKey(), fn.extractOutput(e.getValue()))));
+    }
+
+    @Override
+    public Flux<? extends Flux<WindowedValue<KV<K, OutT>>>> parallel(
+        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux,
+        int parallelism,
+        Scheduler scheduler) {
       return flux.subscribeOn(scheduler)
           .flatMap(group -> group.reduceWith(HashMap::new, this::add), parallelism)
           .reduce(this::merge)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(e.getKey(), fn.extractOutput(e.getValue()))))
-          .parallel(parallelism) // FIXME or skip this as there might be a reshuffle anyways?
+          .parallel(parallelism)
           .runOn(scheduler)
           .groups();
     }

@@ -17,13 +17,14 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
+import static org.apache.beam.sdk.util.Preconditions.checkArgumentNotNull;
+
 import java.util.Collection;
+import org.apache.beam.runners.reactor.translation.Dataset;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.sdk.transforms.Flatten;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
-import reactor.core.publisher.Flux;
 
 class FlattenTranslatorBatch<T>
     extends TransformTranslator<PCollectionList<T>, PCollection<T>, Flatten.PCollections<T>> {
@@ -32,19 +33,18 @@ class FlattenTranslatorBatch<T>
   @SuppressWarnings("nullness")
   public void translate(Flatten.PCollections<T> transform, Context cxt) {
     Collection<PCollection<T>> values = (Collection) cxt.getInputs().values();
-    Flux<Flux<WindowedValue<T>>> flattened = null;
+    Dataset<T, ?> flattened = null;
 
     for (PCollection<T> pCol : values) {
       if (flattened == null) {
-        flattened = (Flux<Flux<WindowedValue<T>>>) cxt.require(pCol);
+        flattened = cxt.require(pCol);
       } else {
-        flattened = flattened.concatWith(cxt.require(pCol));
+        flattened = flattened.union((Dataset) cxt.require(pCol));
       }
     }
 
-    if (flattened == null) {
-      flattened = Flux.empty();
-    }
-    cxt.provide(cxt.getOutput(), flattened);
+    cxt.provide(
+        cxt.getOutput(),
+        checkArgumentNotNull(flattened, "Expected at least one PCollection to flatten"));
   }
 }
