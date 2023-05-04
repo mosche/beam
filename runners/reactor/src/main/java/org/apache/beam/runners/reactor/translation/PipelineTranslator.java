@@ -189,7 +189,7 @@ public abstract class PipelineTranslator {
       current.translation = fn;
 
       if (fn instanceof Translation.CanFuse
-          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation, options)) {
+          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation)) {
         PCollection<T1> prevIn = checkStateNotNull(prev.mainIn);
         current.mainIn = prevIn; // update the input
         // FIXME Why is this causing trouble?

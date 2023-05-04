@@ -33,7 +33,7 @@ public interface Translation<T1, T2> {
       Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts);
 
   interface CanFuse<T1, T2> extends Translation<T1, T2> {
-    <T0> boolean fuse(@Nullable Translation<T0, T1> prev, LocalPipelineOptions opts);
+    <T0> boolean fuse(@Nullable Translation<T0, T1> prev);
   }
 
   class Identity<T> implements Translation<T, T> {

@@ -25,14 +25,8 @@ import reactor.core.scheduler.Schedulers;
 
 public interface LocalPipelineOptions extends PipelineOptions {
   enum SDFMode {
-    SYNC(false),
-    ASYNC(true),
-    ASYNC_WITH_BACKPRESSURE(true);
-    public final boolean async;
-
-    SDFMode(boolean async) {
-      this.async = async;
-    }
+    SYNC,
+    ASYNC
   }
 
   @Default.Boolean(false)
@@ -40,12 +34,7 @@ public interface LocalPipelineOptions extends PipelineOptions {
 
   void setMetricsEnabled(boolean enable);
 
-  @Default.Boolean(true)
-  boolean isFuseSDF();
-
-  void setFuseSDF(boolean enable);
-
-  @Default.Enum("SYNC")
+  @Default.Enum("ASYNC")
   SDFMode getSDFMode();
 
   void setSDFMode(SDFMode mode);

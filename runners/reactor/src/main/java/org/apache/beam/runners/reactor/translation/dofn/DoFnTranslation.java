@@ -18,20 +18,16 @@
 package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
-import static org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode.ASYNC_WITH_BACKPRESSURE;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.LongConsumer;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.RunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
@@ -54,10 +50,10 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   }
 
   @Override
-  public <T0> boolean fuse(@Nullable Translation<T0, T1> prev, LocalPipelineOptions opts) {
+  public <T0> boolean fuse(@Nullable Translation<T0, T1> prev) {
     if (prev != null && prev instanceof DoFnTranslation) {
       DoFnTranslation<T1, T1> prevDoFn = (DoFnTranslation<T1, T1>) prev; // pretend input is T1
-      if (prevDoFn.factory.isSDF() && !opts.isFuseSDF()) {
+      if (prevDoFn.factory.isSDF()) {
         return false;
       }
       factory = prevDoFn.factory.fuse(factory);
@@ -75,72 +71,21 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   @Override
   public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts) {
     Flux<WindowedValue<T2>> outputFlux =
-        Flux.create(sink -> runDoFn(flux, sink, opts)); // FIXME push/create?
-    if (factory.isSDF() && opts.getSDFMode().async) {
+        Flux.create(sink -> runDoFn(flux, sink)); // FIXME push/create?
+    if (factory.isSDF() && opts.getSDFMode() == SDFMode.ASYNC) {
       Scheduler pinned = Schedulers.single(Schedulers.parallel());
       return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
     }
     return outputFlux;
   }
 
-  private void runDoFn(
-      Flux<WindowedValue<T1>> flux, FluxSink<WindowedValue<T2>> sink, LocalPipelineOptions opts) {
-    SinkOutput<T2> out =
-        factory.isSDF() && opts.getSDFMode() == ASYNC_WITH_BACKPRESSURE
-            ? new BackpressuringSinkOutput<>(sink)
-            : new SinkOutput<>(sink);
+  private void runDoFn(Flux<WindowedValue<T1>> flux, FluxSink<WindowedValue<T2>> sink) {
+    SinkOutput<T2> out = new SinkOutput<>(sink);
     Mono<RunnerWithTeardown<T1, T2>> mRunner = factory.create(out, metrics);
     if (LOG.isDebugEnabled()) {
       mRunner = mRunner.doOnNext(runner -> LOG.debug("{}: created on {}", runner, currentThread()));
     }
     mRunner.subscribe(runner -> flux.subscribe(new GroupSubscriber<>(runner, out)), sink::error);
-  }
-
-  /**
-   * OutputManager that tracks inflight elements to backpressure demand from upstream. This is only
-   * necessary when publishing async.
-   */
-  private static class BackpressuringSinkOutput<T2> extends SinkOutput<T2> implements LongConsumer {
-    private static final int MAX_INFLIGHT = 10000;
-    final AtomicLong inflight = new AtomicLong();
-    final AtomicBoolean rejected = new AtomicBoolean(false);
-    @MonotonicNonNull Subscription subscription = null;
-
-    @SuppressWarnings("argument")
-    BackpressuringSinkOutput(FluxSink<WindowedValue<T2>> sink) {
-      super(sink);
-      sink.onRequest(this);
-    }
-
-    @Override
-    void onSubscribe(Subscription subscription) {
-      this.subscription = subscription;
-      super.onSubscribe(subscription);
-    }
-
-    @Override
-    boolean permitRequest() {
-      if (inflight.get() < MAX_INFLIGHT) {
-        return true;
-      }
-      rejected.set(true);
-      return false;
-    }
-
-    @Override
-    public void accept(long demand) {
-      if (inflight.addAndGet(-demand) < MAX_INFLIGHT
-          && subscription != null
-          && rejected.compareAndSet(true, false)) {
-        subscription.request(1);
-      }
-    }
-
-    @Override
-    public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
-      inflight.incrementAndGet();
-      super.output(tag, out);
-    }
   }
 
   /** OutputManager that emits output to a FluxSink. */
@@ -149,10 +94,6 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
     SinkOutput(FluxSink<WindowedValue<T2>> sink) {
       this.sink = sink;
-    }
-
-    boolean permitRequest() {
-      return true;
     }
 
     @Override
@@ -201,9 +142,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
         LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
         runner.processElement(wv);
-        if (output.permitRequest()) {
-          subscription.request(1);
-        }
+        subscription.request(1);
       } catch (RuntimeException e) {
         subscription.cancel();
         onError(e);
