@@ -23,6 +23,7 @@ import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.I
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -37,7 +38,6 @@ import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Converter;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
 
 class GroupByKeyTranslatorBatch<K, V>
     extends TransformTranslator<
@@ -78,7 +78,8 @@ class GroupByKeyTranslatorBatch<K, V>
     }
 
     @Override
-    public Flux<WindowedValue<KV<K, Iterable<V>>>> simple(Flux<WindowedValue<KV<K, V>>> flux) {
+    public Flux<WindowedValue<KV<K, Iterable<V>>>> simple(
+        Flux<WindowedValue<KV<K, V>>> flux, LocalPipelineOptions opts) {
       return flux.collectMultimap(keyMapper, valueMapper)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())));
@@ -86,15 +87,17 @@ class GroupByKeyTranslatorBatch<K, V>
 
     @Override
     public Flux<? extends Flux<WindowedValue<KV<K, Iterable<V>>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, int parallelism, Scheduler scheduler) {
+        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, LocalPipelineOptions opts) {
       Flux<Map<KIntT, Iterable<V>>> maps =
-          flux.subscribeOn(scheduler)
-              .flatMap(group -> (Mono) group.collectMultimap(keyMapper, valueMapper), parallelism);
+          flux.subscribeOn(opts.getScheduler())
+              .flatMap(
+                  group -> (Mono) group.collectMultimap(keyMapper, valueMapper),
+                  opts.getParallelism());
       return maps.reduce(this::merge)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())))
-          .parallel(parallelism)
-          .runOn(scheduler)
+          .parallel(opts.getParallelism())
+          .runOn(opts.getScheduler())
           .groups();
     }
   }

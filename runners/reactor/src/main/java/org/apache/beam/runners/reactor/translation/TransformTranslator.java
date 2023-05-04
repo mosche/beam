@@ -32,7 +32,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
-import reactor.core.scheduler.Scheduler;
 
 @Internal
 public abstract class TransformTranslator<
@@ -133,11 +132,6 @@ public abstract class TransformTranslator<
     @Override
     public LocalPipelineOptions getOptions() {
       return state.getOptions();
-    }
-
-    @Override
-    public Scheduler getScheduler() {
-      return state.getScheduler();
     }
   }
 }

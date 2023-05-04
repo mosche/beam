@@ -63,6 +63,8 @@ import reactor.core.publisher.Mono;
 public abstract class DoFnRunnerFactory<InT, T> {
   interface RunnerWithTeardown<InT, T> extends DoFnRunner<InT, T> {
     void teardown();
+
+    boolean isSDF();
   }
 
   /**
@@ -80,11 +82,8 @@ public abstract class DoFnRunnerFactory<InT, T> {
    */
   abstract <T2> DoFnRunnerFactory<InT, T2> fuse(DoFnRunnerFactory<T, T2> next);
 
-  /**
-   * If this factory is allowed to fuse with another one. We don't want to ever fuse anything onto a
-   * splittable DoFn.
-   */
-  abstract boolean mayFuse();
+  /** This factory produces an SDF runner */
+  abstract boolean isSDF();
 
   // FIXME remove input? We shouldn't need the input coder.
   public static <InT, T> DoFnRunnerFactory<InT, T> simple(
@@ -102,7 +101,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
     final AtomicInteger nextId = new AtomicInteger();
     final LocalPipelineOptions opts;
     final ParDo.MultiOutput<InT, T> transform;
-    final boolean mayFuse;
+    final boolean isSDF;
     final DoFnSchemaInformation schemaInformation;
     final byte @Nullable [] serializedDoFn;
     final PCollection<InT> input;
@@ -120,7 +119,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
       this.schemaInformation = getSchemaInformation(appliedPT);
       this.input = input;
       this.sideInputs = opts.getParallelism() > 1 ? sideInputs.cache() : sideInputs;
-      this.mayFuse = !SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
+      this.isSDF = SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
 
     private static boolean requiresCopy(LocalPipelineOptions opts, DoFn<?, ?> fn) {
@@ -142,8 +141,8 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
 
     @Override
-    boolean mayFuse() {
-      return mayFuse;
+    boolean isSDF() {
+      return isSDF;
     }
 
     @Override
@@ -174,12 +173,12 @@ public abstract class DoFnRunnerFactory<InT, T> {
               ImmutableMap.of());
       // Invoke setup and then startBundle before returning the runner
       DoFnInvokers.tryInvokeSetupFor(runner.getFn(), opts);
-      return new MetricsRunner<>(runner, transform, nextId.incrementAndGet(), metrics);
+      return new MetricsRunner<>(runner, this, metrics);
     }
 
     @Override
     <T2> DoFnRunnerFactory<InT, T2> fuse(DoFnRunnerFactory<T, T2> next) {
-      return new FusedFactory<>(Lists.newArrayList(this, next));
+      return new FusedFactory<>(Lists.newArrayList(this, next), isSDF || next.isSDF());
     }
 
     /**
@@ -210,9 +209,11 @@ public abstract class DoFnRunnerFactory<InT, T> {
    */
   private static class FusedFactory<InT, T> extends DoFnRunnerFactory<InT, T> {
     private final List<DoFnRunnerFactory<?, ?>> factories;
+    private boolean isSDF;
 
-    FusedFactory(List<DoFnRunnerFactory<?, ?>> factories) {
+    FusedFactory(List<DoFnRunnerFactory<?, ?>> factories, boolean isSDF) {
       this.factories = factories;
+      this.isSDF = isSDF;
     }
 
     @Override
@@ -222,8 +223,8 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
 
     @Override
-    boolean mayFuse() {
-      return factories.get(factories.size() - 1).mayFuse();
+    boolean isSDF() {
+      return isSDF;
     }
 
     @Override
@@ -286,6 +287,11 @@ public abstract class DoFnRunnerFactory<InT, T> {
       }
 
       @Override
+      public boolean isSDF() {
+        return runners[runners.length - 1].isSDF();
+      }
+
+      @Override
       public void startBundle() {
         for (int i = 0; i < runners.length; i++) {
           runners[i].startBundle();
@@ -339,24 +345,28 @@ public abstract class DoFnRunnerFactory<InT, T> {
       implements DoFnRunnerFactory.RunnerWithTeardown<InputT, OutputT> {
     private static final Closeable NOOP = () -> {};
     private final DoFnRunner<InputT, OutputT> runner;
-    private final ParDo.MultiOutput<InputT, OutputT> transform;
+    private final SimpleFactory<InputT, OutputT> factory;
     private final int id;
     private final @Nullable MetricsContainer metrics;
 
     MetricsRunner(
         DoFnRunner<InputT, OutputT> runner,
-        ParDo.MultiOutput<InputT, OutputT> transform,
-        int id,
+        SimpleFactory<InputT, OutputT> factory,
         @Nullable MetricsContainer metrics) {
       this.runner = runner;
-      this.transform = transform;
-      this.id = id;
+      this.factory = factory;
+      this.id = factory.nextId.incrementAndGet();
       this.metrics = metrics;
     }
 
     @Override
+    public boolean isSDF() {
+      return factory.isSDF;
+    }
+
+    @Override
     public String toString() {
-      return "Runner[" + transform.getName() + "," + id + "]";
+      return "Runner[" + factory.transform.getName() + "," + id + "]";
     }
 
     @Override

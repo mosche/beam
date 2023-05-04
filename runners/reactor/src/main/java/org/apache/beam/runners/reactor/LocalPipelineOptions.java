@@ -17,35 +17,53 @@
  */
 package org.apache.beam.runners.reactor;
 
-import javax.annotation.Nullable;
 import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.DefaultValueFactory;
 import org.apache.beam.sdk.options.PipelineOptions;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 public interface LocalPipelineOptions extends PipelineOptions {
+  enum SDFMode {
+    SYNC(false),
+    ASYNC(true),
+    ASYNC_WITH_BACKPRESSURE(true);
+    public final boolean async;
+
+    SDFMode(boolean async) {
+      this.async = async;
+    }
+  }
+
   @Default.Boolean(false)
   boolean isMetricsEnabled();
 
   void setMetricsEnabled(boolean enable);
 
   @Default.Boolean(true)
-  boolean isCacheEnabled();
+  boolean isFuseSDF();
 
-  void setCacheEnabled(boolean cacheEnabled);
+  void setFuseSDF(boolean enable);
+
+  @Default.Enum("SYNC")
+  SDFMode getSDFMode();
+
+  void setSDFMode(SDFMode mode);
 
   @Default.Integer(1)
   int getParallelism();
 
   void setParallelism(int parallelism);
 
-  @Nullable
+  @Default.InstanceFactory(SchedulerFactory.class)
   Scheduler getScheduler();
 
   void setScheduler(Scheduler scheduler);
 
-  static Scheduler effectiveScheduler(LocalPipelineOptions opts) {
-    Scheduler scheduler = opts.getScheduler();
-    return scheduler != null ? scheduler : Schedulers.parallel();
+  class SchedulerFactory implements DefaultValueFactory<Scheduler> {
+    @Override
+    public Scheduler create(PipelineOptions options) {
+      return Schedulers.parallel();
+    }
   }
 }

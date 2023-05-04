@@ -48,7 +48,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
-import reactor.core.scheduler.Scheduler;
 
 @Internal
 @SuppressWarnings("unused")
@@ -95,33 +94,18 @@ public abstract class PipelineTranslator {
     boolean isLeaf(PCollection<?> pCollection);
 
     LocalPipelineOptions getOptions();
-
-    Scheduler getScheduler();
   }
 
   private class EagerEvaluationVisitor extends PTransformVisitor implements TranslationState {
     private final Map<PCollection<?>, TranslationResult<?, ?>> translationResults;
     private final LocalPipelineOptions options;
-    private final Scheduler scheduler;
     private final MetricsContainerStepMap metrics;
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
     private final Set<Disposable> leaves = new HashSet<>();
     // initialized to 1 to not complete before visiting all nodes
     private final AtomicInteger pendingLeaves = new AtomicInteger(1);
-
-    private final Consumer<? super Throwable> onError =
-        e -> {
-          LOG.error("Received error", e);
-          leaves.forEach(Disposable::dispose);
-          completion.completeExceptionally(e);
-        };
-
-    private final Runnable onComplete =
-        () -> {
-          if (pendingLeaves.decrementAndGet() == 0) {
-            completion.complete(null);
-          }
-        };
+    private final Consumer<? super Throwable> onError;
+    private final Runnable onComplete;
 
     public EagerEvaluationVisitor(
         LocalPipelineOptions options,
@@ -129,8 +113,21 @@ public abstract class PipelineTranslator {
         Map<PCollection<?>, TranslationResult<?, ?>> translationResults) {
       this.translationResults = translationResults;
       this.options = options;
-      this.scheduler = LocalPipelineOptions.effectiveScheduler(options);
       this.metrics = metrics;
+      this.onError =
+          e -> {
+            LOG.error("Received error", e);
+            leaves.forEach(Disposable::dispose);
+            completion.completeExceptionally(e);
+          };
+      this.onComplete =
+          () -> {
+            if (pendingLeaves.decrementAndGet() == 0) {
+              completion.complete(null);
+              // the default cached parallel scheduler won't be disposed
+              options.getScheduler().dispose();
+            }
+          };
     }
 
     @Override
@@ -168,7 +165,7 @@ public abstract class PipelineTranslator {
         Translation<T1, T2> fn = checkStateNotNull(res.translation);
         PCollection<T1> input = checkStateNotNull(res.mainIn);
         // FIXME discard input if no more usage
-        res.dataset = checkStateNotNull(getResult(input).dataset).transform(fn);
+        res.dataset = checkStateNotNull(getResult(input).dataset).transform(fn, options);
         res.translation = null;
       }
       return res.dataset;
@@ -192,7 +189,7 @@ public abstract class PipelineTranslator {
       current.translation = fn;
 
       if (fn instanceof Translation.CanFuse
-          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation)) {
+          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation, options)) {
         PCollection<T1> prevIn = checkStateNotNull(prev.mainIn);
         current.mainIn = prevIn; // update the input
         // FIXME Why is this causing trouble?
@@ -204,10 +201,7 @@ public abstract class PipelineTranslator {
       if (current.requiredBy.isEmpty()) {
         evaluateLeaf(getOrBuildDataset(current));
       } else if (current.requiredBy.size() > 1) {
-        Dataset<T2, ?> dataset = getOrBuildDataset(current);
-        if (options.isCacheEnabled()) {
-          dataset.cache();
-        }
+        getOrBuildDataset(current).cache();
       }
     }
 
@@ -233,11 +227,6 @@ public abstract class PipelineTranslator {
     @Override
     public LocalPipelineOptions getOptions() {
       return options;
-    }
-
-    @Override
-    public Scheduler getScheduler() {
-      return scheduler;
     }
   }
 

@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
+import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
@@ -25,7 +26,6 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import reactor.core.publisher.Flux;
-import reactor.core.scheduler.Scheduler;
 
 class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     extends TransformTranslator<PCollection<InT>, PCollection<OutT>, Combine.Globally<InT, OutT>> {
@@ -48,7 +48,8 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     }
 
     @Override
-    public Flux<WindowedValue<OutT>> simple(Flux<WindowedValue<InT>> flux) {
+    public Flux<WindowedValue<OutT>> simple(
+        Flux<WindowedValue<InT>> flux, LocalPipelineOptions opts) {
       return flux.reduce(fn.createAccumulator(), this::add)
           .map(fn::extractOutput)
           .map(WindowedValue::valueInGlobalWindow)
@@ -57,15 +58,15 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
 
     @Override
     public Flux<Flux<WindowedValue<OutT>>> parallel(
-        Flux<? extends Flux<WindowedValue<InT>>> flux, int parallelism, Scheduler scheduler) {
+        Flux<? extends Flux<WindowedValue<InT>>> flux, LocalPipelineOptions opts) {
       Flux<WindowedValue<OutT>> global =
-          flux.subscribeOn(scheduler)
-              .flatMap(f -> f.reduce(fn.createAccumulator(), this::add), parallelism)
+          flux.subscribeOn(opts.getScheduler())
+              .flatMap(f -> f.reduce(fn.createAccumulator(), this::add), opts.getParallelism())
               .reduce(this::merge)
               .map(fn::extractOutput)
               .map(WindowedValue::valueInGlobalWindow)
               .flux();
-      return Flux.just(global.subscribeOn(scheduler));
+      return Flux.just(global.subscribeOn(opts.getScheduler()));
     }
 
     private AccT merge(AccT acc1, AccT acc2) {

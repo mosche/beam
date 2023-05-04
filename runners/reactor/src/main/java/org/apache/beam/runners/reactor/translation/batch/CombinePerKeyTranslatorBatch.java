@@ -22,6 +22,7 @@ import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
+import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
@@ -32,7 +33,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import reactor.core.publisher.Flux;
-import reactor.core.scheduler.Scheduler;
 
 class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
     extends TransformTranslator<
@@ -55,7 +55,8 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
     }
 
     @Override
-    public Flux<WindowedValue<KV<K, OutT>>> simple(Flux<WindowedValue<KV<K, InT>>> flux) {
+    public Flux<WindowedValue<KV<K, OutT>>> simple(
+        Flux<WindowedValue<KV<K, InT>>> flux, LocalPipelineOptions opts) {
       return flux.reduceWith(HashMap::new, this::add)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(e.getKey(), fn.extractOutput(e.getValue()))));
@@ -63,16 +64,14 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
 
     @Override
     public Flux<? extends Flux<WindowedValue<KV<K, OutT>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux,
-        int parallelism,
-        Scheduler scheduler) {
-      return flux.subscribeOn(scheduler)
-          .flatMap(group -> group.reduceWith(HashMap::new, this::add), parallelism)
+        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux, LocalPipelineOptions opts) {
+      return flux.subscribeOn(opts.getScheduler())
+          .flatMap(group -> group.reduceWith(HashMap::new, this::add), opts.getParallelism())
           .reduce(this::merge)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(e.getKey(), fn.extractOutput(e.getValue()))))
-          .parallel(parallelism)
-          .runOn(scheduler)
+          .parallel(opts.getParallelism())
+          .runOn(opts.getScheduler())
           .groups();
     }
 

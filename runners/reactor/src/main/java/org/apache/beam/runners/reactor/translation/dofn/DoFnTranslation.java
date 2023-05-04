@@ -18,25 +18,28 @@
 package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
-import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
+import static org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode.ASYNC_WITH_BACKPRESSURE;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongConsumer;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
+import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.RunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
-import reactor.core.publisher.Sinks.Many;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -51,10 +54,10 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   }
 
   @Override
-  public <T0> boolean fuse(@Nullable Translation<T0, T1> prev) {
+  public <T0> boolean fuse(@Nullable Translation<T0, T1> prev, LocalPipelineOptions opts) {
     if (prev != null && prev instanceof DoFnTranslation) {
       DoFnTranslation<T1, T1> prevDoFn = (DoFnTranslation<T1, T1>) prev; // pretend input is T1
-      if (!prevDoFn.factory.mayFuse()) {
+      if (prevDoFn.factory.isSDF() && !opts.isFuseSDF()) {
         return false;
       }
       factory = prevDoFn.factory.fuse(factory);
@@ -64,50 +67,101 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   }
 
   @Override
-  public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux) {
-    SinkOutput<T2> out = new SinkOutput<>(); // FIXME Use FluxSink instead?
+  public Flux<? extends Flux<WindowedValue<T2>>> parallel(
+      Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts) {
+    return flux.map(f -> simple(f, opts));
+  }
+
+  @Override
+  public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts) {
+    Flux<WindowedValue<T2>> outputFlux =
+        Flux.create(sink -> runDoFn(flux, sink, opts)); // FIXME push/create?
+    if (factory.isSDF() && opts.getSDFMode().async) {
+      Scheduler pinned = Schedulers.single(Schedulers.parallel());
+      return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
+    }
+    return outputFlux;
+  }
+
+  private void runDoFn(
+      Flux<WindowedValue<T1>> flux, FluxSink<WindowedValue<T2>> sink, LocalPipelineOptions opts) {
+    SinkOutput<T2> out =
+        factory.isSDF() && opts.getSDFMode() == ASYNC_WITH_BACKPRESSURE
+            ? new BackpressuringSinkOutput<>(sink)
+            : new SinkOutput<>(sink);
     Mono<RunnerWithTeardown<T1, T2>> mRunner = factory.create(out, metrics);
     if (LOG.isDebugEnabled()) {
       mRunner = mRunner.doOnNext(runner -> LOG.debug("{}: created on {}", runner, currentThread()));
     }
-    return mRunner.flatMapMany(
-        runner -> {
-          flux.subscribe(new GroupSubscriber<>(runner, out));
-          Flux<WindowedValue<T2>> outputFlux = out.sink.asFlux();
-          if (factory.mayFuse()) {
-            return outputFlux;
-          } else {
-            Scheduler pinned = Schedulers.single(Schedulers.parallel());
-            if (LOG.isDebugEnabled()) {
-              pinned.schedule(() -> LOG.debug("{}: publishing SDF on {}", runner, currentThread()));
-            }
-            return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
-          }
-        });
+    mRunner.subscribe(runner -> flux.subscribe(new GroupSubscriber<>(runner, out)), sink::error);
   }
 
-  @Override
-  public Flux<? extends Flux<WindowedValue<T2>>> parallel(
-      Flux<? extends Flux<WindowedValue<T1>>> flux, int parallelism, Scheduler scheduler) {
-    return flux.map(this::simple);
-  }
+  /**
+   * OutputManager that tracks inflight elements to backpressure demand from upstream. This is only
+   * necessary when publishing async.
+   */
+  private static class BackpressuringSinkOutput<T2> extends SinkOutput<T2> implements LongConsumer {
+    private static final int MAX_INFLIGHT = 10000;
+    final AtomicLong inflight = new AtomicLong();
+    final AtomicBoolean rejected = new AtomicBoolean(false);
+    @MonotonicNonNull Subscription subscription = null;
 
-  private static class SinkOutput<T2> implements OutputManager {
-    final Many<WindowedValue<T2>> sink = Sinks.unsafe().many().unicast().onBackpressureBuffer();
-    volatile Disposable disposable = () -> {};
+    @SuppressWarnings("argument")
+    BackpressuringSinkOutput(FluxSink<WindowedValue<T2>> sink) {
+      super(sink);
+      sink.onRequest(this);
+    }
 
-    void onError(Disposable disposable) {
-      this.disposable = disposable;
+    @Override
+    void onSubscribe(Subscription subscription) {
+      this.subscription = subscription;
+      super.onSubscribe(subscription);
+    }
+
+    @Override
+    boolean permitRequest() {
+      if (inflight.get() < MAX_INFLIGHT) {
+        return true;
+      }
+      rejected.set(true);
+      return false;
+    }
+
+    @Override
+    public void accept(long demand) {
+      if (inflight.addAndGet(-demand) < MAX_INFLIGHT
+          && subscription != null
+          && rejected.compareAndSet(true, false)) {
+        subscription.request(1);
+      }
     }
 
     @Override
     public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
-      sink.emitNext(
-          (WindowedValue<T2>) out,
-          (signal, result) -> {
-            disposable.dispose();
-            return false;
-          });
+      inflight.incrementAndGet();
+      super.output(tag, out);
+    }
+  }
+
+  /** OutputManager that emits output to a FluxSink. */
+  private static class SinkOutput<T2> implements OutputManager {
+    final FluxSink<WindowedValue<T2>> sink;
+
+    SinkOutput(FluxSink<WindowedValue<T2>> sink) {
+      this.sink = sink;
+    }
+
+    boolean permitRequest() {
+      return true;
+    }
+
+    @Override
+    public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
+      sink.next((WindowedValue<T2>) out);
+    }
+
+    void onSubscribe(Subscription subscription) {
+      sink.onCancel(subscription::cancel);
     }
   }
 
@@ -129,7 +183,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     @Override
     public void onSubscribe(Subscription s) {
       subscription = s;
-      output.onError(() -> subscription.cancel());
+      output.onSubscribe(s);
       subscription.request(1);
     }
 
@@ -147,8 +201,9 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
         LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
         runner.processElement(wv);
-        // FIXME better manage demand based on downstream requests
-        subscription.request(1);
+        if (output.permitRequest()) {
+          subscription.request(1);
+        }
       } catch (RuntimeException e) {
         subscription.cancel();
         onError(e);
@@ -159,7 +214,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     public void onComplete() {
       try {
         runner.finishBundle();
-        output.sink.emitComplete(FAIL_FAST);
+        output.sink.complete();
         runner.teardown();
       } catch (RuntimeException e) {
         onError(e);
@@ -169,7 +224,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     @Override
     public void onError(Throwable e) {
       LOG.error("Received error signal", e);
-      output.sink.emitError(e, FAIL_FAST);
+      output.sink.error(e);
       runner.teardown();
     }
   }
