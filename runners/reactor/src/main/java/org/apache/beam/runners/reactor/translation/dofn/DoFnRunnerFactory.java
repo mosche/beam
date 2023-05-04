@@ -118,6 +118,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
           requiresCopy(opts, transform.getFn()) ? serializeToByteArray(transform.getFn()) : null;
       this.schemaInformation = getSchemaInformation(appliedPT);
       this.input = input;
+      // FIXME broadcast, don't cache!
       this.sideInputs = opts.getParallelism() > 1 ? sideInputs.cache() : sideInputs;
       this.isSDF = SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
@@ -381,12 +382,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
     @Override
     public void startBundle() {
       try (Closeable ignored = scopedMetricsContainer()) {
-        try {
-          runner.startBundle();
-        } catch (RuntimeException re) {
-          teardown();
-          throw re;
-        }
+        runner.startBundle();
       } catch (IOException e) {
         throw new RuntimeException(e);
       }

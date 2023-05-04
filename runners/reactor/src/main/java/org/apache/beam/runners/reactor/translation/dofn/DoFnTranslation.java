@@ -18,6 +18,7 @@
 package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
+import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
@@ -34,8 +35,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -70,8 +71,16 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
   @Override
   public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts) {
+    SinkOutput<T2> out = new SinkOutput<>();
     Flux<WindowedValue<T2>> outputFlux =
-        Flux.create(sink -> runDoFn(flux, sink)); // FIXME push/create?
+        Flux.usingWhen(
+            createRunner(out),
+            runner -> {
+              flux.subscribe(new GroupSubscriber<>(runner, out));
+              return out.sink.asFlux();
+            },
+            runner -> Mono.fromRunnable(() -> runner.teardown()));
+
     if (factory.isSDF() && opts.getSDFMode() == SDFMode.ASYNC) {
       Scheduler pinned = Schedulers.single(Schedulers.parallel());
       return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
@@ -79,26 +88,22 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     return outputFlux;
   }
 
-  private void runDoFn(Flux<WindowedValue<T1>> flux, FluxSink<WindowedValue<T2>> sink) {
-    SinkOutput<T2> out = new SinkOutput<>(sink);
-    Mono<RunnerWithTeardown<T1, T2>> mRunner = factory.create(out, metrics);
+  private Mono<RunnerWithTeardown<T1, T2>> createRunner(SinkOutput<T2> out) {
+    Mono<RunnerWithTeardown<T1, T2>> runner = factory.create(out, metrics);
     if (LOG.isDebugEnabled()) {
-      mRunner = mRunner.doOnNext(runner -> LOG.debug("{}: created on {}", runner, currentThread()));
+      runner = runner.doOnNext(r -> LOG.debug("{}: created on {}", r, currentThread()));
     }
-    mRunner.subscribe(runner -> flux.subscribe(new GroupSubscriber<>(runner, out)), sink::error);
+    return runner;
   }
 
   /** OutputManager that emits output to a FluxSink. */
   private static class SinkOutput<T2> implements OutputManager {
-    final FluxSink<WindowedValue<T2>> sink;
-
-    SinkOutput(FluxSink<WindowedValue<T2>> sink) {
-      this.sink = sink;
-    }
+    final Sinks.Many<WindowedValue<T2>> sink =
+        Sinks.unsafe().many().unicast().onBackpressureBuffer();
 
     @Override
     public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
-      sink.next((WindowedValue<T2>) out);
+      sink.emitNext((WindowedValue<T2>) out, FAIL_FAST); // TODO revisit
     }
   }
 
@@ -117,47 +122,35 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
     @Override
     protected void hookOnSubscribe(Subscription subscription) {
-      output.sink.onCancel(subscription::cancel);
       subscription.request(1);
     }
 
     @Override
     protected void hookOnNext(WindowedValue<T1> wv) {
-      try {
-        Thread current = currentThread();
-        if (pinned.compareAndSet(null, current)) {
-          LOG.debug("{}: startBundle [{}]", runner, current);
-          runner.startBundle();
-        } else if (current != pinned.get()) {
-          LOG.warn("{}: processElement called on {}, expected {}", runner, current, pinned.get());
-          pinned.lazySet(current); // update pinned lazily
-        }
-
-        LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
-        runner.processElement(wv);
-        upstream().request(1);
-      } catch (RuntimeException e) {
-        upstream().cancel();
-        onError(e);
+      Thread current = currentThread();
+      if (pinned.compareAndSet(null, current)) {
+        LOG.debug("{}: startBundle [{}]", runner, current);
+        runner.startBundle();
+      } else if (current != pinned.get()) {
+        LOG.warn("{}: processElement called on {}, expected {}", runner, current, pinned.get());
+        pinned.lazySet(current); // update pinned lazily
       }
+
+      LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
+      runner.processElement(wv);
+      upstream().request(1);
     }
 
     @Override
     protected void hookOnComplete() {
-      try {
-        runner.finishBundle();
-        output.sink.complete();
-        runner.teardown();
-      } catch (RuntimeException e) {
-        onError(e);
-      }
+      runner.finishBundle();
+      output.sink.emitComplete(FAIL_FAST); // TODO Revisit
     }
 
     @Override
     protected void hookOnError(Throwable e) {
       LOG.error("Received error signal", e);
-      output.sink.error(e);
-      runner.teardown();
+      output.sink.emitError(e, FAIL_FAST); // TODO Revisit
     }
   }
 }
