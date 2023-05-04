@@ -29,10 +29,10 @@ import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.checkerframework.checker.nullness.qual.Nullable;
-import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
@@ -100,36 +100,29 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
       sink.next((WindowedValue<T2>) out);
     }
-
-    void onSubscribe(Subscription subscription) {
-      sink.onCancel(subscription::cancel);
-    }
   }
 
-  private static class GroupSubscriber<T1, T2> implements Subscriber<WindowedValue<T1>> {
+  private static class GroupSubscriber<T1, T2> extends BaseSubscriber<WindowedValue<T1>> {
     private static final Logger LOG = LoggerFactory.getLogger(GroupSubscriber.class);
     private final SinkOutput<T2> output;
     private final RunnerWithTeardown<T1, T2> runner;
-    private Subscription subscription;
 
     // Track thread used to call DoFn runner
     private final AtomicReference<@Nullable Thread> pinned = new AtomicReference<>();
 
-    @SuppressWarnings({"argument", "initialization.fields.uninitialized"})
     GroupSubscriber(RunnerWithTeardown<T1, T2> runner, SinkOutput<T2> output) {
       this.output = output;
       this.runner = runner;
     }
 
     @Override
-    public void onSubscribe(Subscription s) {
-      subscription = s;
-      output.onSubscribe(s);
+    protected void hookOnSubscribe(Subscription subscription) {
+      output.sink.onCancel(subscription::cancel);
       subscription.request(1);
     }
 
     @Override
-    public void onNext(WindowedValue<T1> wv) {
+    protected void hookOnNext(WindowedValue<T1> wv) {
       try {
         Thread current = currentThread();
         if (pinned.compareAndSet(null, current)) {
@@ -142,15 +135,15 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
         LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
         runner.processElement(wv);
-        subscription.request(1);
+        upstream().request(1);
       } catch (RuntimeException e) {
-        subscription.cancel();
+        upstream().cancel();
         onError(e);
       }
     }
 
     @Override
-    public void onComplete() {
+    protected void hookOnComplete() {
       try {
         runner.finishBundle();
         output.sink.complete();
@@ -161,7 +154,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     }
 
     @Override
-    public void onError(Throwable e) {
+    protected void hookOnError(Throwable e) {
       LOG.error("Received error signal", e);
       output.sink.error(e);
       runner.teardown();

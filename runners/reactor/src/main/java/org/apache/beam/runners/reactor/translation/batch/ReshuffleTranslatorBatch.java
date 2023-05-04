@@ -29,8 +29,8 @@ import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
+import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Scheduler;
@@ -90,12 +90,10 @@ class ReshuffleTranslatorBatch<K, V>
     }
 
     @SuppressWarnings("rawtypes")
-    private static class Dispatcher<K, V> implements Subscriber<WindowedValue<KV<K, V>>> {
+    private static class Dispatcher<K, V> extends BaseSubscriber<WindowedValue<KV<K, V>>> {
       private final Scheduler scheduler;
       private final FluxSink[] sinks;
-      private Subscription subscription;
 
-      @SuppressWarnings({"initialization.fields.uninitialized"})
       Dispatcher(int parallelism, Scheduler scheduler) {
         this.scheduler = scheduler;
         this.sinks = new FluxSink[parallelism];
@@ -112,8 +110,26 @@ class ReshuffleTranslatorBatch<K, V>
       }
 
       @Override
-      public void onSubscribe(Subscription s) {
-        subscription = s;
+      protected void hookOnSubscribe(Subscription subscription) {}
+
+      @Override
+      protected void hookOnNext(WindowedValue<KV<K, V>> wv) {
+        sinks[sinkIdx(wv)].next(wv);
+        upstream().request(1);
+      }
+
+      @Override
+      protected void hookOnComplete() {
+        for (int i = 0; i < sinks.length; i++) {
+          sinks[i].complete();
+        }
+      }
+
+      @Override
+      protected void hookOnError(Throwable t) {
+        for (int i = 0; i < sinks.length; i++) {
+          sinks[i].error(t);
+        }
       }
 
       // FIXME support arrays / rows as key
@@ -124,27 +140,6 @@ class ReshuffleTranslatorBatch<K, V>
         }
         int rawMod = key.hashCode() % sinks.length;
         return rawMod + (rawMod < 0 ? sinks.length : 0);
-      }
-
-      @Override
-      public void onNext(WindowedValue<KV<K, V>> wv) {
-        FluxSink sink = sinks[sinkIdx(wv)];
-        sink.next(wv);
-        subscription.request(1);
-      }
-
-      @Override
-      public void onError(Throwable t) {
-        for (int i = 0; i < sinks.length; i++) {
-          sinks[i].error(t);
-        }
-      }
-
-      @Override
-      public void onComplete() {
-        for (int i = 0; i < sinks.length; i++) {
-          sinks[i].complete();
-        }
       }
 
       class SubscribeOnce<T> implements Consumer<FluxSink<T>> {
@@ -162,10 +157,10 @@ class ReshuffleTranslatorBatch<K, V>
           if (created.compareAndSet(false, true)) {
             sinks[idx] = sink;
             // dispose sources if a sink is cancelled
-            sink.onCancel(subscription::cancel);
+            sink.onCancel(() -> upstream().cancel());
             if (pendingSinks.decrementAndGet() == 0) {
               // once all sinks are connected, signal demand
-              subscription.request(sinks.length);
+              upstream().request(sinks.length);
             }
           } else {
             throw new UnsupportedOperationException("Only one subscriber allowed");
