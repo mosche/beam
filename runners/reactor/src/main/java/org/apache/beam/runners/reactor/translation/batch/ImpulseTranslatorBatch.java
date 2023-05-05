@@ -26,7 +26,7 @@ import org.apache.beam.sdk.values.PCollection;
 class ImpulseTranslatorBatch extends TransformTranslator<PBegin, PCollection<byte[]>, Impulse> {
 
   @Override
-  public void translate(Impulse transform, Context cxt) {
+  public void translate(Context<PBegin, PCollection<byte[]>, Impulse> cxt) {
     cxt.provide(cxt.getOutput(), Dataset.impulse());
   }
 }

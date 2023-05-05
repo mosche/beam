@@ -25,8 +25,8 @@ import javax.annotation.Nullable;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
-import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
+import org.apache.beam.sdk.transforms.Combine.PerKey;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
@@ -36,11 +36,12 @@ import reactor.core.publisher.Flux;
 
 class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
     extends TransformTranslator<
-        PCollection<KV<K, InT>>, PCollection<KV<K, OutT>>, Combine.PerKey<K, InT, OutT>> {
+        PCollection<KV<K, InT>>, PCollection<KV<K, OutT>>, PerKey<K, InT, OutT>> {
 
   @Override
-  public void translate(Combine.PerKey<K, InT, OutT> transform, Context cxt) {
-    CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) transform.getFn();
+  public void translate(
+      Context<PCollection<KV<K, InT>>, PCollection<KV<K, OutT>>, PerKey<K, InT, OutT>> cxt) {
+    CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) cxt.getTransform().getFn();
     cxt.translate(cxt.getOutput(), new TranslateCombine<>(fn));
   }
 

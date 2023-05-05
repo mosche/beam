@@ -31,8 +31,9 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     extends TransformTranslator<PCollection<InT>, PCollection<OutT>, Combine.Globally<InT, OutT>> {
 
   @Override
-  protected void translate(Combine.Globally<InT, OutT> transform, Context cxt) {
-    CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) transform.getFn();
+  protected void translate(
+      Context<PCollection<InT>, PCollection<OutT>, Combine.Globally<InT, OutT>> cxt) {
+    CombineFn<InT, AccT, OutT> fn = (CombineFn<InT, AccT, OutT>) cxt.getTransform().getFn();
     cxt.translate(cxt.getOutput(), new TranslateCombineGlobally<>(fn));
   }
 

@@ -44,7 +44,8 @@ class GroupByKeyTranslatorBatch<K, V>
         PCollection<KV<K, V>>, PCollection<KV<K, Iterable<V>>>, GroupByKey<K, V>> {
 
   @Override
-  public void translate(GroupByKey<K, V> transform, Context cxt) {
+  public void translate(
+      Context<PCollection<KV<K, V>>, PCollection<KV<K, Iterable<V>>>, GroupByKey<K, V>> cxt) {
     PCollection<KV<K, V>> input = cxt.getInput();
     KvCoder<K, V> coder = (KvCoder<K, V>) input.getCoder();
     Converter<K, ?> keyFn =

@@ -22,7 +22,6 @@ import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.I
 
 import java.util.Map;
 import org.apache.beam.runners.core.construction.TransformInputs;
-import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.sdk.annotations.Internal;
 import org.apache.beam.sdk.metrics.MetricsContainer;
@@ -37,15 +36,7 @@ import org.apache.beam.sdk.values.TupleTag;
 public abstract class TransformTranslator<
     InT extends PInput, OutT extends POutput, TransformT extends PTransform<InT, OutT>> {
 
-  protected abstract void translate(TransformT transform, Context cxt) throws Exception;
-
-  final void translate(
-      TransformT transform,
-      AppliedPTransform<InT, OutT, TransformT> appliedTransform,
-      PipelineTranslator.TranslationState translationState)
-      throws Exception {
-    translate(transform, new Context(appliedTransform, translationState));
-  }
+  protected abstract void translate(Context<InT, OutT, TransformT> cxt);
 
   /**
    * Checks if a composite / primitive transform can be translated. Composites that cannot be
@@ -61,77 +52,49 @@ public abstract class TransformTranslator<
   }
 
   /**
-   * Available mutable context to translate a {@link PTransform}. The context is backed by the
-   * shared {@link PipelineTranslator.TranslationState} of the {@link PipelineTranslator}.
+   * Context for transforming a PTransform.
+   *
+   * <p>Note, the context is only available during translation.
    */
-  protected class Context implements PipelineTranslator.TranslationState {
-    private final AppliedPTransform<InT, OutT, TransformT> transform;
-    private final PipelineTranslator.TranslationState state;
+  public interface Context<
+      InT extends PInput, OutT extends POutput, TransformT extends PTransform<InT, OutT>> {
+    <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset);
 
-    private Context(
-        AppliedPTransform<InT, OutT, TransformT> transform,
-        PipelineTranslator.TranslationState state) {
-      this.transform = transform;
-      this.state = state;
+    <T> Dataset<T, ?> require(PCollection<T> pCollection);
+
+    <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> translation);
+
+    boolean isLeaf(PCollection<?> pCollection);
+
+    MetricsContainer getMetricsContainer();
+
+    LocalPipelineOptions getOptions();
+
+    AppliedPTransform<InT, OutT, TransformT> getAppliedTransform();
+
+    default TransformT getTransform() {
+      return getAppliedTransform().getTransform();
     }
 
-    public InT getInput() {
-      return (InT) getOnlyElement(TransformInputs.nonAdditionalInputs(transform));
+    default Map<TupleTag<?>, PCollection<?>> getInputs() {
+      return getAppliedTransform().getInputs();
     }
 
-    public MetricsContainer getMetricsContainer() {
-      return state.getMetrics().getContainer(transform.getFullName());
+    default Map<TupleTag<?>, PCollection<?>> getOutputs() {
+      return getAppliedTransform().getOutputs();
     }
 
-    @Override
-    public MetricsContainerStepMap getMetrics() {
-      return state.getMetrics();
+    default InT getInput() {
+      return (InT) getOnlyElement(TransformInputs.nonAdditionalInputs(getAppliedTransform()));
     }
 
-    public Map<TupleTag<?>, PCollection<?>> getInputs() {
-      return transform.getInputs();
+    default OutT getOutput() {
+      return (OutT) getOnlyElement(getAppliedTransform().getOutputs().values());
     }
 
-    public Map<TupleTag<?>, PCollection<?>> getOutputs() {
-      return transform.getOutputs();
-    }
-
-    public OutT getOutput() {
-      return (OutT) getOnlyElement(transform.getOutputs().values());
-    }
-
-    public <T> PCollection<T> getOutput(TupleTag<T> tag) {
+    default <T> PCollection<T> getOutput(TupleTag<T> tag) {
       return checkStateNotNull(
-          (PCollection<T>) transform.getOutputs().get(tag), "Invalid tag %", tag);
-    }
-
-    public AppliedPTransform<InT, OutT, TransformT> getCurrentTransform() {
-      return transform;
-    }
-
-    @Override
-    public <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset) {
-      state.provide(pCollection, dataset);
-    }
-
-    @Override
-    public <T> Dataset<T, ?> require(PCollection<T> pCollection) {
-      return state.require(pCollection);
-    }
-
-    @Override
-    public <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> translation) {
-      state.translate(pCollection, translation);
-    }
-
-    @Override
-    public boolean isLeaf(PCollection<?> pCollection) {
-      return state.isLeaf(pCollection);
-    }
-
-    @Override
-    public LocalPipelineOptions getOptions() {
-      return state.getOptions();
+          (PCollection<T>) getAppliedTransform().getOutputs().get(tag), "Invalid tag %", tag);
     }
   }
 }

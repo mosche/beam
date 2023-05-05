@@ -17,7 +17,6 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -39,7 +38,8 @@ class ReshuffleTranslatorBatch<K, V>
     extends TransformTranslator<PCollection<KV<K, V>>, PCollection<KV<K, V>>, Reshuffle<K, V>> {
 
   @Override
-  protected void translate(Reshuffle<K, V> transform, Context cxt) throws IOException {
+  protected void translate(
+      Context<PCollection<KV<K, V>>, PCollection<KV<K, V>>, Reshuffle<K, V>> cxt) {
     cxt.translate(cxt.getOutput(), new ReshuffleTranslation<>());
   }
 
@@ -47,7 +47,8 @@ class ReshuffleTranslatorBatch<K, V>
       extends TransformTranslator<PCollection<V>, PCollection<V>, Reshuffle.ViaRandomKey<V>> {
 
     @Override
-    protected void translate(Reshuffle.ViaRandomKey<V> transform, Context cxt) throws IOException {
+    protected void translate(
+        Context<PCollection<V>, PCollection<V>, Reshuffle.ViaRandomKey<V>> cxt) {
       cxt.<V, V>translate(cxt.getOutput(), new RandomReshuffleTranslation<>());
     }
   }

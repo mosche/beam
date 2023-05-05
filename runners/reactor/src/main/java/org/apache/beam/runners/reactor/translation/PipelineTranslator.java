@@ -36,6 +36,7 @@ import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.annotations.Internal;
+import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.runners.TransformHierarchy.Node;
 import org.apache.beam.sdk.transforms.PTransform;
@@ -82,22 +83,8 @@ public abstract class PipelineTranslator {
     }
   }
 
-  /** Shared, mutable state during the translation of a pipeline. */
-  public interface TranslationState {
-    <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset);
-
-    <T> Dataset<T, ?> require(PCollection<T> pCollection);
-
-    <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> translation);
-
-    MetricsContainerStepMap getMetrics();
-
-    boolean isLeaf(PCollection<?> pCollection);
-
-    LocalPipelineOptions getOptions();
-  }
-
-  private class EagerEvaluationVisitor extends PTransformVisitor implements TranslationState {
+  private class EagerEvaluationVisitor extends PTransformVisitor
+      implements TransformTranslator.Context<PInput, POutput, PTransform<PInput, POutput>> {
     private final Map<PCollection<?>, TranslationResult<?, ?>> translationResults;
     private final LocalPipelineOptions options;
     private final MetricsContainerStepMap metrics;
@@ -108,7 +95,10 @@ public abstract class PipelineTranslator {
     private final Consumer<? super Throwable> onError;
     private final Runnable onComplete;
 
-    public EagerEvaluationVisitor(
+    // Mutable transform currently passed to the transform translator
+    private @Nullable AppliedPTransform<?, ?, ?> currentTransform = null;
+
+    EagerEvaluationVisitor(
         LocalPipelineOptions options,
         MetricsContainerStepMap metrics,
         Map<PCollection<?>, TranslationResult<?, ?>> translationResults) {
@@ -144,17 +134,22 @@ public abstract class PipelineTranslator {
         Node node,
         PTransform<InT, OutT> transform,
         TransformTranslator<InT, OutT, PTransform<InT, OutT>> translator) {
-
-      AppliedPTransform<InT, OutT, PTransform<InT, OutT>> appliedTransform =
-          (AppliedPTransform) node.toAppliedPTransform(getPipeline());
       try {
-        LOG.debug("Translating {}", appliedTransform.getFullName());
-        translator.translate(transform, appliedTransform, this);
+        LOG.debug("Translating {}", node.getFullName());
+        currentTransform = node.toAppliedPTransform(getPipeline());
+        translator.translate((TransformTranslator.Context) this);
       } catch (Exception e) {
         LOG.error("Error during pipeline translation", e);
         onError.accept(e);
         throw new RuntimeException(e);
+      } finally {
+        currentTransform = null;
       }
+    }
+
+    @Override
+    public AppliedPTransform<PInput, POutput, PTransform<PInput, POutput>> getAppliedTransform() {
+      return (AppliedPTransform) checkStateNotNull(currentTransform);
     }
 
     private <T1, T2> TranslationResult<T1, T2> getResult(PCollection<T2> pCollection) {
@@ -219,8 +214,8 @@ public abstract class PipelineTranslator {
     }
 
     @Override
-    public MetricsContainerStepMap getMetrics() {
-      return metrics;
+    public MetricsContainer getMetricsContainer() {
+      return metrics.getContainer(getAppliedTransform().getFullName());
     }
 
     @Override

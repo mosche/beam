@@ -17,12 +17,11 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import java.io.IOException;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
-import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
+import org.apache.beam.sdk.transforms.Combine.GroupedValues;
 import org.apache.beam.sdk.transforms.CombineWithContext;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
@@ -33,17 +32,21 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
     extends TransformTranslator<
         PCollection<? extends KV<K, ? extends Iterable<InT>>>,
         PCollection<KV<K, OutT>>,
-        Combine.GroupedValues<K, InT, OutT>> {
+        GroupedValues<K, InT, OutT>> {
 
   @Override
-  protected void translate(Combine.GroupedValues<K, InT, OutT> transform, Context cxt)
-      throws IOException {
-    CombineFn<InT, AccT, OutT> combineFn = (CombineFn<InT, AccT, OutT>) transform.getFn();
+  protected void translate(
+      Context<
+              PCollection<? extends KV<K, ? extends Iterable<InT>>>,
+              PCollection<KV<K, OutT>>,
+              GroupedValues<K, InT, OutT>>
+          cxt) {
+    CombineFn<InT, AccT, OutT> combineFn = (CombineFn<InT, AccT, OutT>) cxt.getTransform().getFn();
     cxt.translate(cxt.getOutput(), new TranslateCombineValues<>(combineFn));
   }
 
   @Override
-  public boolean canTranslate(Combine.GroupedValues<K, InT, OutT> transform) {
+  public boolean canTranslate(GroupedValues<K, InT, OutT> transform) {
     return !(transform.getFn() instanceof CombineWithContext);
   }
 

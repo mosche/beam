@@ -31,7 +31,7 @@ class FlattenTranslatorBatch<T>
 
   @Override
   @SuppressWarnings("nullness")
-  public void translate(Flatten.PCollections<T> transform, Context cxt) {
+  public void translate(Context<PCollectionList<T>, PCollection<T>, Flatten.PCollections<T>> cxt) {
     Collection<PCollection<T>> values = (Collection) cxt.getInputs().values();
     Dataset<T, ?> flattened = null;
 

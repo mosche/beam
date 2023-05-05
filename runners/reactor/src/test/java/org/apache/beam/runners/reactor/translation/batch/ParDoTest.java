@@ -17,7 +17,6 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;

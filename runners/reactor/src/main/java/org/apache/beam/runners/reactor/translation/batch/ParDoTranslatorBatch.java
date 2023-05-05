@@ -25,7 +25,6 @@ import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects.firstNonNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
-import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
 import org.apache.beam.runners.core.InMemoryMultimapSideInputView;
@@ -87,18 +86,20 @@ class ParDoTranslatorBatch<InT, OutT>
     return true;
   }
 
-  private WindowFn<?, ?> getInputWindowFn(Context cxt) {
+  private WindowFn<?, ?> getInputWindowFn(
+      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
     return cxt.getInput().getWindowingStrategy().getWindowFn();
   }
 
   @Override
-  public void translate(ParDo.MultiOutput<InT, OutT> transform, Context cxt) throws IOException {
+  public void translate(
+      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
     checkState(
         getInputWindowFn(cxt) instanceof GlobalWindows
             || getInputWindowFn(cxt) instanceof IdentityWindowFn,
         "Only default WindowingStrategy supported");
 
-    TupleTag<OutT> mainOut = transform.getMainOutputTag();
+    TupleTag<OutT> mainOut = cxt.getTransform().getMainOutputTag();
     // Only main allowed. Leaf outputs can be ignored, these are not used.
     boolean isMainOnly =
         cxt.getOutputs().entrySet().stream()
@@ -109,15 +110,17 @@ class ParDoTranslatorBatch<InT, OutT>
 
     LocalPipelineOptions opts = cxt.getOptions();
     MetricsContainer metrics = opts.isMetricsEnabled() ? cxt.getMetricsContainer() : null;
-    Mono<SideInputReader> sideInReader = sideInputReader(transform.getSideInputs().values(), cxt);
+    Mono<SideInputReader> sideInReader =
+        sideInputReader(cxt.getTransform().getSideInputs().values(), cxt);
     DoFnRunnerFactory<InT, OutT> factory =
-        DoFnRunnerFactory.simple(opts, cxt.getCurrentTransform(), input, sideInReader);
+        DoFnRunnerFactory.simple(opts, cxt.getAppliedTransform(), input, sideInReader);
 
     cxt.translate(cxt.getOutput(mainOut), new DoFnTranslation<>(factory, metrics));
   }
 
   private <T> Mono<SideInputReader> sideInputReader(
-      Collection<@NonNull PCollectionView<?>> views, Context cxt) {
+      Collection<@NonNull PCollectionView<?>> views,
+      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
     if (views.isEmpty()) {
       return Mono.just(EmptyReader.INSTANCE);
     }
@@ -129,7 +132,8 @@ class ParDoTranslatorBatch<InT, OutT>
   }
 
   private <T> Mono<KV<TupleTag<?>, Iterable<WindowedValue<T>>>> sideInput(
-      PCollectionView<?> view, Context cxt) {
+      PCollectionView<?> view,
+      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
     PCollection<T> pCol = checkStateNotNull((PCollection<T>) view.getPCollection());
     return cxt.require(pCol)
         .collect()

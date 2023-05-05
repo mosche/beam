@@ -38,7 +38,7 @@ class AssignWindowTranslatorBatch<T>
   }
 
   @Override
-  public void translate(Window.Assign<T> transform, Context cxt) {
+  public void translate(Context<PCollection<T>, PCollection<T>, Window.Assign<T>> cxt) {
     cxt.translate(cxt.getOutput(), Translation.identity());
   }
 }
