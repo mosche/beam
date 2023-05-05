@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
+import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
@@ -25,7 +26,6 @@ import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.Reshuffle;
 import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
@@ -42,11 +42,20 @@ public class ParDoTest {
   @Test
   public void testPardo() {
     PCollection<Integer> input =
+        pipeline.apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)).apply(ParDo.of(PLUS_ONE_DOFN));
+    PAssert.that(input).containsInAnyOrder(2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    pipeline.run();
+  }
+
+  @Test
+  public void testPardoWithUnusedAdditionalOutput() {
+    PCollectionTuple outputs =
         pipeline
             .apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
-            .apply(Reshuffle.viaRandomKey())
-            .apply(ParDo.of(PLUS_ONE_DOFN));
-    PAssert.that(input).containsInAnyOrder(2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            .apply("+1", ParDo.of(PLUS_ONE_DOFN))
+            .apply("even", ParDo.of(EVEN_DOFN).withOutputTags(EVEN, TupleTagList.of(UNEVEN)));
+
+    PAssert.that(outputs.get(EVEN)).containsInAnyOrder(2, 4, 6, 8, 10);
     pipeline.run();
   }
 
@@ -149,6 +158,20 @@ public class ParDoTest {
         @ProcessElement
         public void processElement(ProcessContext c) {
           c.output(c.element() + 1);
+        }
+      };
+
+  private static final TupleTag<Integer> EVEN = new TupleTag<Integer>() {};
+  private static final TupleTag<String> UNEVEN = new TupleTag<String>() {};
+  private static final DoFn<Integer, Integer> EVEN_DOFN =
+      new DoFn<Integer, Integer>() {
+        @ProcessElement
+        public void processElement(@Element Integer i, MultiOutputReceiver out) {
+          if (i % 2 == 0) {
+            out.get(EVEN).output(i);
+          } else {
+            out.get(UNEVEN).output(i.toString());
+          }
         }
       };
 

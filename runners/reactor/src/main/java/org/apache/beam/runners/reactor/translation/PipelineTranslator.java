@@ -28,8 +28,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import javax.annotation.Nullable;
 import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
@@ -45,6 +45,7 @@ import org.apache.beam.sdk.values.PInput;
 import org.apache.beam.sdk.values.POutput;
 import org.apache.beam.sdk.values.TupleTag;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
@@ -72,7 +73,7 @@ public abstract class PipelineTranslator {
 
   private static final class TranslationResult<T1, T2> {
     private @Nullable PCollection<T1> mainIn;
-    private final Set<PTransform<?, ?>> requiredBy = new HashSet<>();
+    private final Set<PTransform<?, ?>> subscribers = new HashSet<>();
     private @MonotonicNonNull Dataset<T2, ?> dataset = null;
     private @Nullable Translation<T1, T2> translation = null;
 
@@ -167,6 +168,7 @@ public abstract class PipelineTranslator {
         // FIXME discard input if no more usage
         res.dataset = checkStateNotNull(getResult(input).dataset).transform(fn, options);
         res.translation = null;
+        res.mainIn = null;
       }
       return res.dataset;
     }
@@ -184,23 +186,25 @@ public abstract class PipelineTranslator {
     @Override
     public <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> fn) {
       TranslationResult<T1, T2> current = getResult(pCollection);
-      TranslationResult<T1, T1> prev = getResult(checkStateNotNull(current.mainIn));
+      TranslationResult<T1, T1> input = getResult(checkStateNotNull(current.mainIn));
 
       current.translation = fn;
 
       if (fn instanceof Translation.CanFuse
-          && ((Translation.CanFuse<T1, T2>) fn).fuse(prev.translation)) {
-        PCollection<T1> prevIn = checkStateNotNull(prev.mainIn);
-        current.mainIn = prevIn; // update the input
-        // FIXME Why is this causing trouble?
-        // translationResults.remove(prevIn); // fused prev into current, drop it
+          && ((Translation.CanFuse<T1, T2>) fn).fuse(input.translation)) {
+        PCollection<?> obsoleteMainIn = checkStateNotNull(current.mainIn);
+        current.mainIn = checkStateNotNull(input.mainIn);
+        // Fused the input into the current translation result, input is obsolete by now.
+        // TODO: Watch out if supporting multiple outs, these depend on input as well.
+        translationResults.remove(obsoleteMainIn);
       } else {
-        getOrBuildDataset(prev); // make sure the publisher for prev is build
+        getOrBuildDataset(input); // make sure the publisher for prev is build
       }
 
-      if (current.requiredBy.isEmpty()) {
+      int subscribers = current.subscribers.size();
+      if (subscribers == 0) {
         evaluateLeaf(getOrBuildDataset(current));
-      } else if (current.requiredBy.size() > 1) {
+      } else if (subscribers > 1) {
         getOrBuildDataset(current).cache();
       }
     }
@@ -221,7 +225,7 @@ public abstract class PipelineTranslator {
 
     @Override
     public boolean isLeaf(PCollection<?> pCollection) {
-      return getResult(pCollection).requiredBy.isEmpty();
+      return getResult(pCollection).subscribers.isEmpty();
     }
 
     @Override
@@ -244,22 +248,20 @@ public abstract class PipelineTranslator {
         Node node,
         PTransform<InT, OutT> transform,
         TransformTranslator<InT, OutT, PTransform<InT, OutT>> translator) {
-      PCollection<InT> mainIn = null;
-      Set<TupleTag<?>> otherIns =
-          1 == node.getInputs().size() - transform.getAdditionalInputs().size()
-              ? transform.getAdditionalInputs().keySet()
-              : null;
+      Set<TupleTag<?>> otherIns = transform.getAdditionalInputs().keySet();
+      AtomicReference<@Nullable PCollection<InT>> mainIn = new AtomicReference<>();
+      node.getInputs()
+          .forEach(
+              (tag, pIn) -> {
+                if (!otherIns.contains(tag)) {
+                  mainIn.set((PCollection) pIn);
+                }
+                checkStateNotNull(results.get(pIn)).subscribers.add(transform);
+              });
 
-      for (Map.Entry<TupleTag<?>, PCollection<?>> entry : node.getInputs().entrySet()) {
-        if (mainIn == null && otherIns != null && !otherIns.contains(entry.getKey())) {
-          mainIn = (PCollection<InT>) entry.getValue();
-        }
-        TranslationResult<?, ?> res = checkStateNotNull(results.get(entry.getValue()));
-        res.requiredBy.add(transform);
-      }
-      for (PCollection<?> pOut : node.getOutputs().values()) {
-        results.put(pOut, new TranslationResult<>(mainIn));
-      }
+      node.getOutputs()
+          .values()
+          .forEach(pOut -> results.put(pOut, new TranslationResult<>(mainIn.get())));
     }
   }
 
