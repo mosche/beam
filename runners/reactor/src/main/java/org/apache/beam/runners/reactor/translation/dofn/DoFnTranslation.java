@@ -18,12 +18,13 @@
 package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
+import static org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode.ASYNC;
 import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
 import org.apache.beam.runners.reactor.LocalPipelineOptions;
-import org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.RunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
@@ -41,7 +42,6 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation.CanFuse<T1, T2> {
-  private static final Logger LOG = LoggerFactory.getLogger(DoFnTranslation.class);
   private final @Nullable MetricsContainer metrics;
   private DoFnRunnerFactory<T1, T2> factory;
 
@@ -66,56 +66,92 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   @Override
   public Flux<? extends Flux<WindowedValue<T2>>> parallel(
       Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts) {
-    return flux.map(f -> simple(f, opts));
+    // return flux.map(f -> simple(f, opts));
+    throw new UnsupportedOperationException();
   }
 
   @Override
-  public Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts) {
-    SinkOutput<T2> out = new SinkOutput<>();
-    Flux<WindowedValue<T2>> outputFlux =
-        Flux.usingWhen(
-            createRunner(out),
-            runner -> {
-              flux.subscribe(new GroupSubscriber<>(runner, out));
-              return out.sink.asFlux();
-            },
-            runner -> Mono.fromRunnable(() -> runner.teardown()));
-
-    if (factory.isSDF() && opts.getSDFMode() == SDFMode.ASYNC) {
-      Scheduler pinned = Schedulers.single(Schedulers.parallel());
-      return outputFlux.publishOn(pinned).doOnTerminate(pinned::dispose);
-    }
-    return outputFlux;
-  }
-
-  private Mono<RunnerWithTeardown<T1, T2>> createRunner(SinkOutput<T2> out) {
-    Mono<RunnerWithTeardown<T1, T2>> runner = factory.create(out, metrics);
-    if (LOG.isDebugEnabled()) {
-      runner = runner.doOnNext(r -> LOG.debug("{}: created on {}", r, currentThread()));
-    }
-    return runner;
+  public Flux<WindowedValue<T2>> simple(
+      Flux<WindowedValue<T1>> fluxIn, int subscribers, LocalPipelineOptions opts) {
+    final SinkOutputManager<T2> out = new SinkOutputManager<>(subscribers, factory.isSDF(), opts);
+    return Flux.defer(() -> out.createOutput(fluxIn, factory, metrics));
   }
 
   /** OutputManager that emits output to a FluxSink. */
-  private static class SinkOutput<T2> implements OutputManager {
-    final Sinks.Many<WindowedValue<T2>> sink =
-        Sinks.unsafe().many().unicast().onBackpressureBuffer();
+  private static class SinkOutputManager<T2> implements OutputManager {
+    private final AtomicInteger counter = new AtomicInteger();
+    private final int subscribers;
+    private final @Nullable Scheduler scheduler;
+    private Sinks.Many<WindowedValue<T2>> sink;
+
+    SinkOutputManager(int subscribers, boolean isSdf, LocalPipelineOptions opts) {
+      this.scheduler = isSdf && opts.getSDFMode() == ASYNC ? opts.getScheduler() : null;
+      this.subscribers = Math.max(1, subscribers);
+      Sinks.ManySpec many = Sinks.unsafe().many();
+      this.sink = subscribers <= 1 ? many.unicast().onBackpressureBuffer() : many.replay().all();
+    }
+
+    <T1> Flux<WindowedValue<T2>> createOutput(
+        Flux<WindowedValue<T1>> in,
+        DoFnRunnerFactory<T1, T2> factory,
+        @Nullable MetricsContainer metrics) {
+      int count = counter.incrementAndGet();
+      Flux<WindowedValue<T2>> internalOut = sink.asFlux();
+      Flux<WindowedValue<T2>> out =
+          count == 1
+              ? Flux.usingWhen(
+                  factory.create(this, metrics),
+                  runner -> {
+                    in.subscribe(new GroupSubscriber<>(runner, this));
+                    return internalOut;
+                  },
+                  runner -> Mono.fromRunnable(runner::teardown))
+              : internalOut; // just replay internal sink
+      if (count > subscribers) {
+        dispose();
+      }
+
+      if (scheduler == null) {
+        return out;
+      }
+      Scheduler pinned = Schedulers.single(scheduler);
+      return out.publishOn(pinned).doOnTerminate(pinned::dispose);
+    }
 
     @Override
     public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
       sink.emitNext((WindowedValue<T2>) out, FAIL_FAST); // TODO revisit
     }
+
+    void complete() {
+      sink.emitComplete(FAIL_FAST); // TODO Revisit
+      if (counter.incrementAndGet() > subscribers) {
+        dispose();
+      }
+    }
+
+    void error(Throwable e) {
+      sink.emitError(e, FAIL_FAST); // TODO Revisit
+      if (counter.getAndDecrement() <= 0) {
+        dispose();
+      }
+    }
+
+    @SuppressWarnings("nullness")
+    void dispose() {
+      sink = null;
+    }
   }
 
   private static class GroupSubscriber<T1, T2> extends BaseSubscriber<WindowedValue<T1>> {
     private static final Logger LOG = LoggerFactory.getLogger(GroupSubscriber.class);
-    private final SinkOutput<T2> output;
+    private final SinkOutputManager<T2> output;
     private final RunnerWithTeardown<T1, T2> runner;
 
     // Track thread used to call DoFn runner
     private final AtomicReference<@Nullable Thread> pinned = new AtomicReference<>();
 
-    GroupSubscriber(RunnerWithTeardown<T1, T2> runner, SinkOutput<T2> output) {
+    GroupSubscriber(RunnerWithTeardown<T1, T2> runner, SinkOutputManager<T2> output) {
       this.output = output;
       this.runner = runner;
     }
@@ -144,13 +180,13 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     @Override
     protected void hookOnComplete() {
       runner.finishBundle();
-      output.sink.emitComplete(FAIL_FAST); // TODO Revisit
+      output.complete();
     }
 
     @Override
     protected void hookOnError(Throwable e) {
       LOG.error("Received error signal", e);
-      output.sink.emitError(e, FAIL_FAST); // TODO Revisit
+      output.error(e);
     }
   }
 }

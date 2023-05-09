@@ -30,11 +30,22 @@ public class CombineGloballyTest {
 
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
+  private PCollection<Integer> summedValues() {
+    Values<Integer> values = Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    return pipeline.apply(values).apply(Sum.integersGlobally());
+  }
+
   @Test
   public void testCombineGlobally() {
-    Values<Integer> values = Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    PCollection<Integer> input = summedValues();
+    PAssert.that(input).containsInAnyOrder(55);
+    pipeline.run();
+  }
 
-    PCollection<Integer> input = pipeline.apply(values).apply(Sum.integersGlobally());
+  @Test
+  public void testCombineGloballyWithMultipleSubscribers() {
+    PCollection<Integer> input = summedValues();
+    PAssert.that(input).containsInAnyOrder(55);
     PAssert.that(input).containsInAnyOrder(55);
     pipeline.run();
   }

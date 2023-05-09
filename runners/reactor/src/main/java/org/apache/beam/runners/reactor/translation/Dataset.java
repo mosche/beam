@@ -30,40 +30,36 @@ import reactor.core.publisher.Mono;
 
 public interface Dataset<T, FluxT> {
   static Dataset<byte[], ?> impulse() {
-    Flux<WindowedValue<byte[]>> impulse = Flux.just(valueInGlobalWindow(EMPTY_BYTE_ARRAY));
-    return new SimpleDataset<>(impulse);
+    return SimpleDataset.IMPULSE;
   }
 
-  <T2> Dataset<T2, ?> transform(Translation<T, T2> t, LocalPipelineOptions opts);
+  <T2> Dataset<T2, ?> transform(Translation<T, T2> t, int subscribers, LocalPipelineOptions opts);
 
   Disposable evaluate(Consumer<? super Throwable> onError, Runnable onComplete);
-
-  void cache();
 
   Dataset<T, FluxT> union(Dataset<T, FluxT> other);
 
   Mono<List<WindowedValue<T>>> collect();
 
   class SimpleDataset<T> implements Dataset<T, Flux<T>> {
-    private Flux<WindowedValue<T>> flux;
+    private static final Dataset<byte[], ?> IMPULSE =
+        new SimpleDataset<>(Flux.just(valueInGlobalWindow(EMPTY_BYTE_ARRAY)));
+
+    private final Flux<WindowedValue<T>> flux;
 
     private SimpleDataset(Flux<WindowedValue<T>> flux) {
       this.flux = flux;
     }
 
     @Override
-    public <T2> Dataset<T2, ?> transform(Translation<T, T2> t, LocalPipelineOptions opts) {
-      return new SimpleDataset<>(t.simple(flux, opts));
+    public <T2> Dataset<T2, ?> transform(
+        Translation<T, T2> t, int subscribers, LocalPipelineOptions opts) {
+      return new SimpleDataset<>(t.simple(flux, subscribers, opts));
     }
 
     @Override
     public Disposable evaluate(Consumer<? super Throwable> onError, Runnable onComplete) {
-      return flux.count().subscribe(null, onError, onComplete);
-    }
-
-    @Override
-    public void cache() {
-      flux = flux.cache();
+      return flux.subscribe(null, onError, onComplete);
     }
 
     @Override

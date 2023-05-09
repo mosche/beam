@@ -24,6 +24,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.schemas.transforms.CoGroup;
 import org.apache.beam.sdk.schemas.transforms.CoGroup.By;
@@ -31,6 +32,7 @@ import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.GroupByKey;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -42,22 +44,35 @@ import org.junit.Test;
 public class GroupByKeyTest implements Serializable {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
-  @Test
-  public void testGroupByKey() {
+  SerializableFunction<Map<Integer, Iterable<Integer>>, Void> groupValidationFn =
+      results -> {
+        assertThat(results.get(1), containsInAnyOrder(1, 3, 5));
+        assertThat(results.get(2), containsInAnyOrder(2, 4, 6));
+        return null;
+      };
+
+  PCollection<KV<Integer, Iterable<Integer>>> groupedValues() {
     List<KV<Integer, Integer>> elems =
         shuffleRandomly(
             KV.of(1, 1), KV.of(1, 3), KV.of(1, 5), KV.of(2, 2), KV.of(2, 4), KV.of(2, 6));
 
-    PCollection<KV<Integer, Iterable<Integer>>> input =
-        pipeline.apply(Create.of(elems)).apply(GroupByKey.create());
+    return pipeline.apply(Create.of(elems)).apply(GroupByKey.create());
+  }
 
-    PAssert.thatMap(input)
-        .satisfies(
-            results -> {
-              assertThat(results.get(1), containsInAnyOrder(1, 3, 5));
-              assertThat(results.get(2), containsInAnyOrder(2, 4, 6));
-              return null;
-            });
+  @Test
+  public void testGroupByKey() {
+    PCollection<KV<Integer, Iterable<Integer>>> input = groupedValues();
+
+    PAssert.thatMap(input).satisfies(groupValidationFn);
+    pipeline.run();
+  }
+
+  @Test
+  public void testGroupByKeyWithMultipleSubscribers() {
+    PCollection<KV<Integer, Iterable<Integer>>> input = groupedValues();
+
+    PAssert.thatMap(input).satisfies(groupValidationFn);
+    PAssert.thatMap(input).satisfies(groupValidationFn);
     pipeline.run();
   }
 

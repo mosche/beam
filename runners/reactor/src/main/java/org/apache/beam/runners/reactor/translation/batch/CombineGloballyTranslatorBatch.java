@@ -37,7 +37,8 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     cxt.translate(cxt.getOutput(), new TranslateCombineGlobally<>(fn));
   }
 
-  private static class TranslateCombineGlobally<InT, AccT, OutT> implements Translation<InT, OutT> {
+  private static class TranslateCombineGlobally<InT, AccT, OutT>
+      extends Translation.BasicTranslation<InT, OutT> {
     final CombineFn<InT, AccT, OutT> fn;
 
     TranslateCombineGlobally(CombineFn<InT, AccT, OutT> fn) {

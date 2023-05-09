@@ -101,39 +101,34 @@ class ParDoTranslatorBatch<InT, OutT>
 
     TupleTag<OutT> mainOut = cxt.getTransform().getMainOutputTag();
     // Only main allowed. Leaf outputs can be ignored, these are not used.
-    boolean isMainOnly =
-        cxt.getOutputs().entrySet().stream()
-            .allMatch(e -> e.getKey().equals(mainOut) || cxt.isLeaf(e.getValue()));
-    checkState(isMainOnly, "Additional outputs are not supported");
-
-    PCollection<InT> input = (PCollection<InT>) cxt.getInput();
+    cxt.getOutputs()
+        .forEach(
+            (k, v) ->
+                checkState(mainOut.equals(k) || cxt.isLeaf(v), "Additional outs unsupported"));
 
     LocalPipelineOptions opts = cxt.getOptions();
     MetricsContainer metrics = opts.isMetricsEnabled() ? cxt.getMetricsContainer() : null;
     Mono<SideInputReader> sideInReader =
         sideInputReader(cxt.getTransform().getSideInputs().values(), cxt);
     DoFnRunnerFactory<InT, OutT> factory =
-        DoFnRunnerFactory.simple(opts, cxt.getAppliedTransform(), input, sideInReader);
+        DoFnRunnerFactory.simple(opts, cxt.getAppliedTransform(), sideInReader);
 
     cxt.translate(cxt.getOutput(mainOut), new DoFnTranslation<>(factory, metrics));
   }
 
   private <T> Mono<SideInputReader> sideInputReader(
-      Collection<@NonNull PCollectionView<?>> views,
-      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
+      Collection<@NonNull PCollectionView<?>> views, Context<?, ?, ?> cxt) {
     if (views.isEmpty()) {
-      return Mono.just(EmptyReader.INSTANCE);
+      return EmptyReader.INSTANCE;
     }
-    Iterable<Mono<KV<TupleTag<?>, Iterable<WindowedValue<T>>>>> collectedViews =
-        transform(views, view -> sideInput(checkStateNotNull(view), cxt));
-    return Flux.concat(collectedViews)
-        .<TupleTag<?>, Iterable<WindowedValue<T>>>collectMap(KV::getKey, KV::getValue)
+    return Flux.fromIterable(views)
+        .concatMap(view -> sideInput(checkStateNotNull((PCollectionView<T>) view), cxt))
+        .collectMap(KV::getKey, KV::getValue)
         .map(GlobalSideInputReader::new);
   }
 
   private <T> Mono<KV<TupleTag<?>, Iterable<WindowedValue<T>>>> sideInput(
-      PCollectionView<?> view,
-      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
+      PCollectionView<T> view, Context<?, ?, ?> cxt) {
     PCollection<T> pCol = checkStateNotNull((PCollection<T>) view.getPCollection());
     return cxt.require(pCol)
         .collect()
@@ -141,7 +136,7 @@ class ParDoTranslatorBatch<InT, OutT>
   }
 
   private static class EmptyReader implements SideInputReader {
-    static final SideInputReader INSTANCE = new EmptyReader();
+    static final Mono<SideInputReader> INSTANCE = Mono.just(new EmptyReader());
 
     @Override
     public <T> @Nullable T get(PCollectionView<T> view, BoundedWindow window) {
@@ -160,9 +155,9 @@ class ParDoTranslatorBatch<InT, OutT>
   }
 
   private static class GlobalSideInputReader<T> implements SideInputReader {
-    private final Map<TupleTag<?>, Iterable<WindowedValue<T>>> datasets;
+    private final Map<? extends TupleTag<?>, Iterable<WindowedValue<T>>> datasets;
 
-    GlobalSideInputReader(Map<TupleTag<?>, Iterable<WindowedValue<T>>> datasets) {
+    GlobalSideInputReader(Map<? extends TupleTag<?>, Iterable<WindowedValue<T>>> datasets) {
       this.datasets = datasets;
     }
 

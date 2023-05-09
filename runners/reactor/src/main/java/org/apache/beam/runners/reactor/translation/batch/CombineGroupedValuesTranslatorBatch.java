@@ -52,7 +52,7 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
 
   // FIXME Fuse with group by key
   private static class TranslateCombineValues<K, InT, AccT, OutT>
-      implements Translation<KV<K, Iterable<InT>>, KV<K, OutT>> {
+      extends Translation.BasicTranslation<KV<K, Iterable<InT>>, KV<K, OutT>> {
     final CombineFn<InT, AccT, OutT> fn;
 
     TranslateCombineValues(CombineFn<InT, AccT, OutT> fn) {

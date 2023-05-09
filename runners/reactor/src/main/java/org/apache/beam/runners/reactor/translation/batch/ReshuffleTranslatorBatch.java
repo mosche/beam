@@ -53,7 +53,7 @@ class ReshuffleTranslatorBatch<K, V>
     }
   }
 
-  private static class RandomReshuffleTranslation<V> implements Translation<V, V> {
+  private static class RandomReshuffleTranslation<V> extends Translation.BasicTranslation<V, V> {
 
     @Override
     public Flux<WindowedValue<V>> simple(Flux<WindowedValue<V>> flux, LocalPipelineOptions opts) {
@@ -70,7 +70,8 @@ class ReshuffleTranslatorBatch<K, V>
     }
   }
 
-  private static class ReshuffleTranslation<K, V> implements Translation<KV<K, V>, KV<K, V>> {
+  private static class ReshuffleTranslation<K, V>
+      extends Translation.BasicTranslation<KV<K, V>, KV<K, V>> {
     @Override
     public Flux<WindowedValue<KV<K, V>>> simple(
         Flux<WindowedValue<KV<K, V>>> flux, LocalPipelineOptions opts) {

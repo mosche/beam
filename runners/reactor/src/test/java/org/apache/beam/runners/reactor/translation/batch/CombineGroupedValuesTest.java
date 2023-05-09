@@ -35,18 +35,29 @@ import org.junit.Test;
 public class CombineGroupedValuesTest {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
+  private PCollection<KV<String, Integer>> groupedValues() {
+    return pipeline
+        .apply(
+            Create.<KV<String, Iterable<Integer>>>of(
+                    KV.of("a", ImmutableList.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)),
+                    KV.of("b", ImmutableList.of()))
+                .withCoder(KvCoder.of(StringUtf8Coder.of(), IterableCoder.of(VarIntCoder.of()))))
+        .apply(Combine.groupedValues(Sum.ofIntegers()));
+  }
+
   @Test
   public void testCombineGroupedValues() {
-    PCollection<KV<String, Integer>> input =
-        pipeline
-            .apply(
-                Create.<KV<String, Iterable<Integer>>>of(
-                        KV.of("a", ImmutableList.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)),
-                        KV.of("b", ImmutableList.of()))
-                    .withCoder(
-                        KvCoder.of(StringUtf8Coder.of(), IterableCoder.of(VarIntCoder.of()))))
-            .apply(Combine.groupedValues(Sum.ofIntegers()));
+    PCollection<KV<String, Integer>> input = groupedValues();
 
+    PAssert.that(input).containsInAnyOrder(KV.of("a", 55), KV.of("b", 0));
+    pipeline.run();
+  }
+
+  @Test
+  public void testCombineGroupedValuesWithMultipleSubscribers() {
+    PCollection<KV<String, Integer>> input = groupedValues();
+
+    PAssert.that(input).containsInAnyOrder(KV.of("a", 55), KV.of("b", 0));
     PAssert.that(input).containsInAnyOrder(KV.of("a", 55), KV.of("b", 0));
     pipeline.run();
   }

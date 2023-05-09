@@ -56,7 +56,7 @@ class GroupByKeyTranslatorBatch<K, V>
   }
 
   private static class TranslateGroupByKey<K, KIntT, V>
-      implements Translation<KV<K, V>, KV<K, Iterable<V>>> {
+      extends Translation.BasicTranslation<KV<K, V>, KV<K, Iterable<V>>> {
     final Function<WindowedValue<KV<K, V>>, KIntT> keyMapper;
     final Function<WindowedValue<KV<K, V>>, V> valueMapper;
     final Converter<K, KIntT> keyFn;

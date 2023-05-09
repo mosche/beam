@@ -33,8 +33,7 @@ import org.junit.Test;
 public class CombinePerKeyTest {
   @Rule public TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
-  @Test
-  public void testCombinePerKey() {
+  PCollection<KV<Integer, Integer>> summedPerKey() {
     List<KV<Integer, Integer>> elems = new ArrayList<>();
     elems.add(KV.of(1, 1));
     elems.add(KV.of(1, 3));
@@ -43,8 +42,20 @@ public class CombinePerKeyTest {
     elems.add(KV.of(2, 4));
     elems.add(KV.of(2, 6));
 
-    PCollection<KV<Integer, Integer>> input =
-        pipeline.apply(Create.of(elems)).apply(Sum.integersPerKey());
+    return pipeline.apply(Create.of(elems)).apply(Sum.integersPerKey());
+  }
+
+  @Test
+  public void testCombinePerKey() {
+    PCollection<KV<Integer, Integer>> input = summedPerKey();
+    PAssert.that(input).containsInAnyOrder(KV.of(1, 9), KV.of(2, 12));
+    pipeline.run();
+  }
+
+  @Test
+  public void testCombinePerKeyWithMultipleSubscribers() {
+    PCollection<KV<Integer, Integer>> input = summedPerKey();
+    PAssert.that(input).containsInAnyOrder(KV.of(1, 9), KV.of(2, 12));
     PAssert.that(input).containsInAnyOrder(KV.of(1, 9), KV.of(2, 12));
     pipeline.run();
   }

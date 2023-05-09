@@ -52,7 +52,6 @@ import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 
 @Internal
-@SuppressWarnings("unused")
 public abstract class PipelineTranslator {
 
   private static final Logger LOG = LoggerFactory.getLogger(PipelineTranslator.class);
@@ -67,25 +66,25 @@ public abstract class PipelineTranslator {
     pipeline.traverseTopologically(dependencies);
 
     EagerEvaluationVisitor translator =
-        new EagerEvaluationVisitor(options, metrics, dependencies.results);
+        new EagerEvaluationVisitor(options, metrics, dependencies.translations);
     pipeline.traverseTopologically(translator);
     return translator.completion;
   }
 
-  private static final class TranslationResult<T1, T2> {
+  private static final class TranslationState<T1, T2> {
     private @Nullable PCollection<T1> mainIn;
-    private final Set<PTransform<?, ?>> subscribers = new HashSet<>();
+    private int subscribers = 0;
     private @MonotonicNonNull Dataset<T2, ?> dataset = null;
     private @Nullable Translation<T1, T2> translation = null;
 
-    TranslationResult(@Nullable PCollection<T1> mainIn) {
+    TranslationState(@Nullable PCollection<T1> mainIn) {
       this.mainIn = mainIn;
     }
   }
 
   private class EagerEvaluationVisitor extends PTransformVisitor
       implements TransformTranslator.Context<PInput, POutput, PTransform<PInput, POutput>> {
-    private final Map<PCollection<?>, TranslationResult<?, ?>> translationResults;
+    private final Map<PCollection<?>, @Nullable TranslationState<?, ?>> translations;
     private final LocalPipelineOptions options;
     private final MetricsContainerStepMap metrics;
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
@@ -101,8 +100,8 @@ public abstract class PipelineTranslator {
     EagerEvaluationVisitor(
         LocalPipelineOptions options,
         MetricsContainerStepMap metrics,
-        Map<PCollection<?>, TranslationResult<?, ?>> translationResults) {
-      this.translationResults = translationResults;
+        Map<PCollection<?>, @Nullable TranslationState<?, ?>> translations) {
+      this.translations = translations;
       this.options = options;
       this.metrics = metrics;
       this.onError =
@@ -152,16 +151,19 @@ public abstract class PipelineTranslator {
       return (AppliedPTransform) checkStateNotNull(currentTransform);
     }
 
-    private <T1, T2> TranslationResult<T1, T2> getResult(PCollection<T2> pCollection) {
-      return (TranslationResult<T1, T2>) checkStateNotNull(translationResults.get(pCollection));
+    private <T1, T2> TranslationState<T1, T2> getResult(PCollection<T2> pCollection) {
+      return (TranslationState<T1, T2>) checkStateNotNull(translations.get(pCollection));
     }
 
-    private <T1, T2> Dataset<T2, ?> getOrBuildDataset(TranslationResult<T1, T2> res) {
+    private <T1, T2> Dataset<T2, ?> getOrBuildDataset(TranslationState<T1, T2> res) {
       if (res.dataset == null) {
         Translation<T1, T2> fn = checkStateNotNull(res.translation);
-        PCollection<T1> input = checkStateNotNull(res.mainIn);
-        // FIXME discard input if no more usage
-        res.dataset = checkStateNotNull(getResult(input).dataset).transform(fn, options);
+        PCollection<T1> mainIn = checkStateNotNull(res.mainIn);
+        TranslationState<?, T1> in = getResult(mainIn);
+        if (--in.subscribers <= 0) {
+          translations.put(mainIn, null);
+        }
+        res.dataset = checkStateNotNull(in.dataset).transform(fn, res.subscribers, options);
         res.translation = null;
         res.mainIn = null;
       }
@@ -180,8 +182,8 @@ public abstract class PipelineTranslator {
 
     @Override
     public <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> fn) {
-      TranslationResult<T1, T2> current = getResult(pCollection);
-      TranslationResult<T1, T1> input = getResult(checkStateNotNull(current.mainIn));
+      TranslationState<T1, T2> current = getResult(pCollection);
+      TranslationState<T1, T1> input = getResult(checkStateNotNull(current.mainIn));
 
       current.translation = fn;
 
@@ -191,16 +193,16 @@ public abstract class PipelineTranslator {
         current.mainIn = checkStateNotNull(input.mainIn);
         // Fused the input into the current translation result, input is obsolete by now.
         // TODO: Watch out if supporting multiple outs, these depend on input as well.
-        translationResults.remove(obsoleteMainIn);
+        translations.put(obsoleteMainIn, null);
       } else {
         getOrBuildDataset(input); // make sure the publisher for prev is build
       }
 
-      int subscribers = current.subscribers.size();
-      if (subscribers == 0) {
-        evaluateLeaf(getOrBuildDataset(current));
-      } else if (subscribers > 1) {
-        getOrBuildDataset(current).cache();
+      if (current.subscribers != 1) {
+        Dataset<T2, ?> ds = getOrBuildDataset(current);
+        if (current.subscribers == 0) {
+          evaluateLeaf(ds);
+        }
       }
     }
 
@@ -220,7 +222,7 @@ public abstract class PipelineTranslator {
 
     @Override
     public boolean isLeaf(PCollection<?> pCollection) {
-      return getResult(pCollection).subscribers.isEmpty();
+      return getResult(pCollection).subscribers == 0;
     }
 
     @Override
@@ -236,7 +238,8 @@ public abstract class PipelineTranslator {
    * <p>The visitor may throw if a {@link PTransform} is observed that uses unsupported features.
    */
   private class DependencyVisitor extends PTransformVisitor {
-    private final Map<PCollection<?>, TranslationResult<?, ?>> results = new HashMap<>();
+    private final Map<PCollection<?>, @Nullable TranslationState<?, ?>> translations =
+        new HashMap<>();
 
     @Override
     <InT extends PInput, OutT extends POutput> void visit(
@@ -251,12 +254,11 @@ public abstract class PipelineTranslator {
                 if (!otherIns.contains(tag)) {
                   mainIn.set((PCollection) pIn);
                 }
-                checkStateNotNull(results.get(pIn)).subscribers.add(transform);
+                checkStateNotNull(translations.get(pIn)).subscribers++;
               });
-
       node.getOutputs()
           .values()
-          .forEach(pOut -> results.put(pOut, new TranslationResult<>(mainIn.get())));
+          .forEach(pOut -> translations.put(pOut, new TranslationState<>(mainIn.get())));
     }
   }
 

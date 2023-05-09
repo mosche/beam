@@ -38,10 +38,23 @@ import org.junit.Test;
 public class ParDoTest {
   @Rule public transient TestPipeline pipeline = TestPipeline.fromOptions(TestOptions.create());
 
+  PCollection<Integer> plusOne() {
+    return pipeline
+        .apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+        .apply("+1", ParDo.of(PLUS_ONE_DOFN));
+  }
+
   @Test
   public void testPardo() {
-    PCollection<Integer> input =
-        pipeline.apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)).apply(ParDo.of(PLUS_ONE_DOFN));
+    PCollection<Integer> input = plusOne();
+    PAssert.that(input).containsInAnyOrder(2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    pipeline.run();
+  }
+
+  @Test
+  public void testPardoWithMultipleSubscribers() {
+    PCollection<Integer> input = plusOne();
+    PAssert.that(input).containsInAnyOrder(2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
     PAssert.that(input).containsInAnyOrder(2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
     pipeline.run();
   }
@@ -49,10 +62,7 @@ public class ParDoTest {
   @Test
   public void testPardoWithUnusedAdditionalOutput() {
     PCollectionTuple outputs =
-        pipeline
-            .apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
-            .apply("+1", ParDo.of(PLUS_ONE_DOFN))
-            .apply("even", ParDo.of(EVEN_DOFN).withOutputTags(EVEN, TupleTagList.of(UNEVEN)));
+        plusOne().apply("even", ParDo.of(EVEN_DOFN).withOutputTags(EVEN, TupleTagList.of(UNEVEN)));
 
     PAssert.that(outputs.get(EVEN)).containsInAnyOrder(2, 4, 6, 8, 10);
     pipeline.run();
@@ -65,25 +75,8 @@ public class ParDoTest {
   }
 
   @Test
-  public void testPardoWithUnusedOutputTags() {
-    DiscardUnevenDoFn doFn = new DiscardUnevenDoFn();
-
-    PCollectionTuple outputs =
-        pipeline
-            .apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
-            .apply(ParDo.of(doFn).withOutputTags(doFn.main, TupleTagList.of(doFn.uneven)));
-
-    PAssert.that(outputs.get(doFn.main)).containsInAnyOrder(2, 4, 6, 8, 10);
-    pipeline.run();
-  }
-
-  @Test
   public void testTwoPardoInRow() {
-    PCollection<Integer> input =
-        pipeline
-            .apply(Create.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
-            .apply("Plus 1 (1st)", ParDo.of(PLUS_ONE_DOFN))
-            .apply("Plus 1 (2nd)", ParDo.of(PLUS_ONE_DOFN));
+    PCollection<Integer> input = plusOne().apply("Plus 1 (2nd)", ParDo.of(PLUS_ONE_DOFN));
     PAssert.that(input).containsInAnyOrder(3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
     pipeline.run();
   }
@@ -186,22 +179,6 @@ public class ParDoTest {
       List<Integer> sideInputValue = c.sideInput(sideInput);
       if (!sideInputValue.contains(c.element())) {
         c.output(c.element());
-      }
-    }
-  }
-
-  private static class DiscardUnevenDoFn extends DoFn<Integer, Integer> {
-    final TupleTag<Integer> main = new TupleTag<Integer>() {};
-    final TupleTag<String> uneven = new TupleTag<String>() {};
-
-    public DiscardUnevenDoFn() {}
-
-    @ProcessElement
-    public void processElement(@Element Integer i, MultiOutputReceiver out) {
-      if (i % 2 == 0) {
-        out.get(main).output(i);
-      } else {
-        out.get(uneven).output(i.toString()); // obsolete, not used
       }
     }
   }

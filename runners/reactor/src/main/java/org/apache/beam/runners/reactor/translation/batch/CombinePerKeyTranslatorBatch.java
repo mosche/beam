@@ -48,7 +48,7 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
   // FIXME must also use rowconverter
   @SuppressWarnings("nullness")
   private static class TranslateCombine<K, InT, AccT, OutT>
-      implements Translation<KV<K, InT>, KV<K, OutT>> {
+      extends Translation.BasicTranslation<KV<K, InT>, KV<K, OutT>> {
     final CombineFn<InT, AccT, OutT> fn;
 
     TranslateCombine(CombineFn<InT, AccT, OutT> fn) {

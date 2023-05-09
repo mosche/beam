@@ -27,7 +27,8 @@ public interface Translation<T1, T2> {
     return (Identity<T>) Identity.INSTANCE;
   }
 
-  Flux<WindowedValue<T2>> simple(Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts);
+  Flux<WindowedValue<T2>> simple(
+      Flux<WindowedValue<T1>> flux, int subscribers, LocalPipelineOptions opts);
 
   Flux<? extends Flux<WindowedValue<T2>>> parallel(
       Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts);
@@ -36,11 +37,24 @@ public interface Translation<T1, T2> {
     <T0> boolean fuse(@Nullable Translation<T0, T1> prev);
   }
 
+  abstract class BasicTranslation<T1, T2> implements Translation<T1, T2> {
+    @Override
+    public Flux<WindowedValue<T2>> simple(
+        Flux<WindowedValue<T1>> flux, int subscribers, LocalPipelineOptions opts) {
+      Flux<WindowedValue<T2>> result = simple(flux, opts);
+      return subscribers > 1 ? result.publish().refCount(subscribers) : result;
+    }
+
+    public abstract Flux<WindowedValue<T2>> simple(
+        Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts);
+  }
+
   class Identity<T> implements Translation<T, T> {
     private static final Identity<?> INSTANCE = new Identity<>();
 
     @Override
-    public Flux<WindowedValue<T>> simple(Flux<WindowedValue<T>> flux, LocalPipelineOptions opts) {
+    public Flux<WindowedValue<T>> simple(
+        Flux<WindowedValue<T>> flux, int subscribers, LocalPipelineOptions opts) {
       return flux;
     }
 
