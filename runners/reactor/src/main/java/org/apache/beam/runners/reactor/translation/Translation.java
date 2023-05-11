@@ -30,9 +30,6 @@ public interface Translation<T1, T2> {
   Flux<WindowedValue<T2>> simple(
       Flux<WindowedValue<T1>> flux, int subscribers, ReactorOptions opts);
 
-  Flux<? extends Flux<WindowedValue<T2>>> parallel(
-      Flux<? extends Flux<WindowedValue<T1>>> flux, ReactorOptions opts);
-
   interface CanFuse<T1, T2> extends Translation<T1, T2> {
     <T0> boolean fuse(@Nullable Translation<T0, T1> prev);
   }
@@ -55,12 +52,6 @@ public interface Translation<T1, T2> {
     @Override
     public Flux<WindowedValue<T>> simple(
         Flux<WindowedValue<T>> flux, int subscribers, ReactorOptions opts) {
-      return flux;
-    }
-
-    @Override
-    public Flux<? extends Flux<WindowedValue<T>>> parallel(
-        Flux<? extends Flux<WindowedValue<T>>> flux, ReactorOptions opts) {
       return flux;
     }
   }

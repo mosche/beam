@@ -37,7 +37,6 @@ import org.apache.beam.sdk.values.Row;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Converter;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 class GroupByKeyTranslatorBatch<K, V>
     extends TransformTranslator<
@@ -84,22 +83,6 @@ class GroupByKeyTranslatorBatch<K, V>
       return flux.collectMultimap(keyMapper, valueMapper)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())));
-    }
-
-    @Override
-    public Flux<? extends Flux<WindowedValue<KV<K, Iterable<V>>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, ReactorOptions opts) {
-      Flux<Map<KIntT, Iterable<V>>> maps =
-          flux.subscribeOn(opts.getScheduler())
-              .flatMap(
-                  group -> (Mono) group.collectMultimap(keyMapper, valueMapper),
-                  opts.getParallelism());
-      return maps.reduce(this::merge)
-          .flatMapIterable(Map::entrySet)
-          .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())))
-          .parallel(opts.getParallelism())
-          .runOn(opts.getScheduler())
-          .groups();
     }
   }
 

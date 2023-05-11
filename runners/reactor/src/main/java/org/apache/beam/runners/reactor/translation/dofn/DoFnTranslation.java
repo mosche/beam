@@ -64,13 +64,6 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   }
 
   @Override
-  public Flux<? extends Flux<WindowedValue<T2>>> parallel(
-      Flux<? extends Flux<WindowedValue<T1>>> flux, ReactorOptions opts) {
-    // return flux.map(f -> simple(f, opts));
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public Flux<WindowedValue<T2>> simple(
       Flux<WindowedValue<T1>> fluxIn, int subscribers, ReactorOptions opts) {
     final SinkOutputManager<T2> out = new SinkOutputManager<>(subscribers, factory.isSDF(), opts);

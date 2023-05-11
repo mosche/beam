@@ -39,11 +39,6 @@ public interface ReactorOptions extends PipelineOptions {
 
   void setSDFMode(SDFMode mode);
 
-  @Default.Integer(1)
-  int getParallelism();
-
-  void setParallelism(int parallelism);
-
   @Default.InstanceFactory(SchedulerFactory.class)
   Scheduler getScheduler();
 

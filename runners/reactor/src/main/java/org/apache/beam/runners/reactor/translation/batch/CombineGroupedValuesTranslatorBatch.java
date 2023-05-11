@@ -72,11 +72,5 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
         Flux<WindowedValue<KV<K, Iterable<InT>>>> flux, ReactorOptions opts) {
       return flux.map(this::reduce);
     }
-
-    @Override
-    public Flux<Flux<WindowedValue<KV<K, OutT>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, Iterable<InT>>>>> flux, ReactorOptions opts) {
-      return flux.map(f -> simple(f, opts));
-    }
   }
 }

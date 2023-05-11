@@ -19,8 +19,6 @@ package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.util.Collections.EMPTY_MAP;
 import static org.apache.beam.runners.core.construction.ParDoTranslation.getSchemaInformation;
-import static org.apache.beam.sdk.util.SerializableUtils.deserializeFromByteArray;
-import static org.apache.beam.sdk.util.SerializableUtils.serializeToByteArray;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -46,8 +44,6 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.reflect.DoFnInvokers;
-import org.apache.beam.sdk.transforms.reflect.DoFnSignature;
-import org.apache.beam.sdk.transforms.reflect.DoFnSignatures;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
@@ -99,7 +95,6 @@ public abstract class DoFnRunnerFactory<InT, T> {
     final ParDo.MultiOutput<InT, T> transform;
     final boolean isSDF;
     final DoFnSchemaInformation schemaInformation;
-    final byte @Nullable [] serializedDoFn;
     final Mono<SideInputReader> sideInputs;
 
     SimpleFactory(
@@ -108,29 +103,13 @@ public abstract class DoFnRunnerFactory<InT, T> {
         Mono<SideInputReader> sideInputs) {
       this.opts = opts;
       this.transform = appliedPT.getTransform();
-      this.serializedDoFn =
-          requiresCopy(opts, transform.getFn()) ? serializeToByteArray(transform.getFn()) : null;
       this.schemaInformation = getSchemaInformation(appliedPT);
-      this.sideInputs = opts.getParallelism() > 1 ? sideInputs.share() : sideInputs;
+      this.sideInputs = sideInputs;
       this.isSDF = SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
 
-    private static boolean requiresCopy(ReactorOptions opts, DoFn<?, ?> fn) {
-      if (opts.getParallelism() == 1) {
-        return false;
-      }
-      DoFnSignature sig = DoFnSignatures.signatureForDoFn(fn);
-      return sig.startBundle() != null
-          || sig.finishBundle() != null
-          || sig.teardown() != null
-          || sig.setup() != null
-          || sig.usesState();
-    }
-
     private DoFn<InT, T> getDoFnInstance() {
-      return serializedDoFn != null
-          ? (DoFn<InT, T>) deserializeFromByteArray(serializedDoFn, "DoFn")
-          : transform.getFn();
+      return transform.getFn();
     }
 
     @Override

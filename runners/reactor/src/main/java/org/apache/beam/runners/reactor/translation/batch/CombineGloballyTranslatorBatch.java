@@ -24,7 +24,6 @@ import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import reactor.core.publisher.Flux;
 
 class CombineGloballyTranslatorBatch<InT, AccT, OutT>
@@ -55,23 +54,6 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
           .map(fn::extractOutput)
           .map(WindowedValue::valueInGlobalWindow)
           .flux();
-    }
-
-    @Override
-    public Flux<Flux<WindowedValue<OutT>>> parallel(
-        Flux<? extends Flux<WindowedValue<InT>>> flux, ReactorOptions opts) {
-      Flux<WindowedValue<OutT>> global =
-          flux.subscribeOn(opts.getScheduler())
-              .flatMap(f -> f.reduce(fn.createAccumulator(), this::add), opts.getParallelism())
-              .reduce(this::merge)
-              .map(fn::extractOutput)
-              .map(WindowedValue::valueInGlobalWindow)
-              .flux();
-      return Flux.just(global.subscribeOn(opts.getScheduler()));
-    }
-
-    private AccT merge(AccT acc1, AccT acc2) {
-      return fn.mergeAccumulators(ImmutableList.of(acc1, acc2));
     }
   }
 }
