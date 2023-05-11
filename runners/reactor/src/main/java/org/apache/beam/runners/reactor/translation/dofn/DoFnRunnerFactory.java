@@ -36,7 +36,7 @@ import org.apache.beam.runners.core.StepContext;
 import org.apache.beam.runners.core.TimerInternals;
 import org.apache.beam.runners.core.construction.PTransformMatchers;
 import org.apache.beam.runners.core.construction.SplittableParDoNaiveBounded;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.runners.AppliedPTransform;
@@ -84,7 +84,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
   abstract boolean isSDF();
 
   public static <InT, T> DoFnRunnerFactory<InT, T> simple(
-      LocalPipelineOptions opts,
+      ReactorOptions opts,
       AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
       Mono<SideInputReader> sideInputReader) {
     return new SimpleFactory<>(opts, appliedPT, sideInputReader);
@@ -95,7 +95,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
         PTransformMatchers.parDoWithFnType(SplittableParDoNaiveBounded.NaiveProcessFn.class);
 
     final AtomicInteger nextId = new AtomicInteger();
-    final LocalPipelineOptions opts;
+    final ReactorOptions opts;
     final ParDo.MultiOutput<InT, T> transform;
     final boolean isSDF;
     final DoFnSchemaInformation schemaInformation;
@@ -103,7 +103,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
     final Mono<SideInputReader> sideInputs;
 
     SimpleFactory(
-        LocalPipelineOptions opts,
+        ReactorOptions opts,
         AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
         Mono<SideInputReader> sideInputs) {
       this.opts = opts;
@@ -115,7 +115,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
       this.isSDF = SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
 
-    private static boolean requiresCopy(LocalPipelineOptions opts, DoFn<?, ?> fn) {
+    private static boolean requiresCopy(ReactorOptions opts, DoFn<?, ?> fn) {
       if (opts.getParallelism() == 1) {
         return false;
       }

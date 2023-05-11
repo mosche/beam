@@ -19,25 +19,23 @@ package org.apache.beam.runners.reactor;
 
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineRunner;
-import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.testing.TestPipelineOptions;
 
-@Experimental
-public final class TestLocalRunner extends PipelineRunner<LocalPipelineResult> {
-  private final LocalRunner delegate;
+public final class TestReactorRunner extends PipelineRunner<ReactorPipelineResult> {
+  private final ReactorRunner delegate;
 
-  public static TestLocalRunner fromOptions(PipelineOptions options) {
-    return new TestLocalRunner(options);
+  public static TestReactorRunner fromOptions(PipelineOptions options) {
+    return new TestReactorRunner(options);
   }
 
-  private TestLocalRunner(PipelineOptions options) {
-    this.delegate = LocalRunner.fromOptions(options);
+  private TestReactorRunner(PipelineOptions options) {
+    this.delegate = ReactorRunner.fromOptions(options);
   }
 
   @Override
-  public LocalPipelineResult run(Pipeline pipeline) {
-    LocalPipelineResult result = delegate.run(pipeline);
+  public ReactorPipelineResult run(Pipeline pipeline) {
+    ReactorPipelineResult result = delegate.run(pipeline);
     TestPipelineOptions testOptions = pipeline.getOptions().as(TestPipelineOptions.class);
     if (testOptions.isBlockOnRun()) {
       result.waitUntilFinish();

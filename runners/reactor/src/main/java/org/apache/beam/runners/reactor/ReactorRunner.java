@@ -26,35 +26,30 @@ import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.runners.reactor.translation.batch.PipelineTranslatorBatch;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineRunner;
-import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.metrics.MetricsEnvironment;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsValidator;
 import org.apache.beam.sdk.runners.PTransformOverride;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 
-@Experimental
-@SuppressWarnings({
-  "nullness" // TODO(https://github.com/apache/beam/issues/20497)
-})
-public final class LocalRunner extends PipelineRunner<LocalPipelineResult> {
-  private final LocalPipelineOptions options;
+public final class ReactorRunner extends PipelineRunner<ReactorPipelineResult> {
+  private final ReactorOptions options;
 
-  public static LocalRunner fromOptions(PipelineOptions options) {
-    return new LocalRunner(PipelineOptionsValidator.validate(LocalPipelineOptions.class, options));
+  public static ReactorRunner fromOptions(PipelineOptions options) {
+    return new ReactorRunner(PipelineOptionsValidator.validate(ReactorOptions.class, options));
   }
 
-  private LocalRunner(LocalPipelineOptions options) {
+  private ReactorRunner(ReactorOptions options) {
     this.options = options;
   }
 
   @Override
-  public LocalPipelineResult run(final Pipeline pipeline) {
+  public ReactorPipelineResult run(final Pipeline pipeline) {
     MetricsEnvironment.setMetricsSupported(options.isMetricsEnabled());
     pipeline.replaceAll(getDefaultOverrides());
     MetricsContainerStepMap metrics = new MetricsContainerStepMap();
     Future<Void> completion = new PipelineTranslatorBatch().evaluate(pipeline, options, metrics);
-    return new LocalPipelineResult(metrics, completion);
+    return new ReactorPipelineResult(metrics, completion);
   }
 
   private static List<PTransformOverride> getDefaultOverrides() {

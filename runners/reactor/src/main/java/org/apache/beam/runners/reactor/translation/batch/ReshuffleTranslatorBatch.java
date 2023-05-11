@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Reshuffle;
@@ -56,13 +56,13 @@ class ReshuffleTranslatorBatch<K, V>
   private static class RandomReshuffleTranslation<V> extends Translation.BasicTranslation<V, V> {
 
     @Override
-    public Flux<WindowedValue<V>> simple(Flux<WindowedValue<V>> flux, LocalPipelineOptions opts) {
+    public Flux<WindowedValue<V>> simple(Flux<WindowedValue<V>> flux, ReactorOptions opts) {
       return flux;
     }
 
     @Override
     public Flux<? extends Flux<WindowedValue<V>>> parallel(
-        Flux<? extends Flux<WindowedValue<V>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<V>>> flux, ReactorOptions opts) {
       return flux.subscribeOn(opts.getScheduler())
           .flatMap(Function.identity(), opts.getParallelism())
           .parallel(opts.getParallelism())
@@ -74,13 +74,13 @@ class ReshuffleTranslatorBatch<K, V>
       extends Translation.BasicTranslation<KV<K, V>, KV<K, V>> {
     @Override
     public Flux<WindowedValue<KV<K, V>>> simple(
-        Flux<WindowedValue<KV<K, V>>> flux, LocalPipelineOptions opts) {
+        Flux<WindowedValue<KV<K, V>>> flux, ReactorOptions opts) {
       return flux; // noop
     }
 
     @Override
     public Flux<? extends Flux<WindowedValue<KV<K, V>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, ReactorOptions opts) {
       return flux.flatMap(Function.identity(), opts.getParallelism())
           .transform(
               flattened -> {

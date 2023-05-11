@@ -17,7 +17,7 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine;
@@ -50,8 +50,7 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
     }
 
     @Override
-    public Flux<WindowedValue<OutT>> simple(
-        Flux<WindowedValue<InT>> flux, LocalPipelineOptions opts) {
+    public Flux<WindowedValue<OutT>> simple(Flux<WindowedValue<InT>> flux, ReactorOptions opts) {
       return flux.reduce(fn.createAccumulator(), this::add)
           .map(fn::extractOutput)
           .map(WindowedValue::valueInGlobalWindow)
@@ -60,7 +59,7 @@ class CombineGloballyTranslatorBatch<InT, AccT, OutT>
 
     @Override
     public Flux<Flux<WindowedValue<OutT>>> parallel(
-        Flux<? extends Flux<WindowedValue<InT>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<InT>>> flux, ReactorOptions opts) {
       Flux<WindowedValue<OutT>> global =
           flux.subscribeOn(opts.getScheduler())
               .flatMap(f -> f.reduce(fn.createAccumulator(), this::add), opts.getParallelism())

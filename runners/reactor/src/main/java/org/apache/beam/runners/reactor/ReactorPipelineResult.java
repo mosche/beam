@@ -28,12 +28,12 @@ import org.apache.beam.sdk.metrics.MetricResults;
 import org.apache.beam.sdk.util.UserCodeException;
 import org.joda.time.Duration;
 
-public class LocalPipelineResult implements PipelineResult {
+public class ReactorPipelineResult implements PipelineResult {
   private final MetricsContainerStepMap metrics;
 
   private final Future<Void> completion;
 
-  public LocalPipelineResult(MetricsContainerStepMap metrics, Future<Void> completion) {
+  public ReactorPipelineResult(MetricsContainerStepMap metrics, Future<Void> completion) {
     this.metrics = metrics;
     this.completion = completion;
   }

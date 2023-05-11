@@ -18,13 +18,13 @@
 package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
-import static org.apache.beam.runners.reactor.LocalPipelineOptions.SDFMode.ASYNC;
+import static org.apache.beam.runners.reactor.ReactorOptions.SDFMode.ASYNC;
 import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.RunnerWithTeardown;
 import org.apache.beam.sdk.metrics.MetricsContainer;
@@ -65,14 +65,14 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
 
   @Override
   public Flux<? extends Flux<WindowedValue<T2>>> parallel(
-      Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts) {
+      Flux<? extends Flux<WindowedValue<T1>>> flux, ReactorOptions opts) {
     // return flux.map(f -> simple(f, opts));
     throw new UnsupportedOperationException();
   }
 
   @Override
   public Flux<WindowedValue<T2>> simple(
-      Flux<WindowedValue<T1>> fluxIn, int subscribers, LocalPipelineOptions opts) {
+      Flux<WindowedValue<T1>> fluxIn, int subscribers, ReactorOptions opts) {
     final SinkOutputManager<T2> out = new SinkOutputManager<>(subscribers, factory.isSDF(), opts);
     return Flux.defer(() -> out.createOutput(fluxIn, factory, metrics));
   }
@@ -84,7 +84,7 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
     private final @Nullable Scheduler scheduler;
     private Sinks.Many<WindowedValue<T2>> sink;
 
-    SinkOutputManager(int subscribers, boolean isSdf, LocalPipelineOptions opts) {
+    SinkOutputManager(int subscribers, boolean isSdf, ReactorOptions opts) {
       this.scheduler = isSdf && opts.getSDFMode() == ASYNC ? opts.getScheduler() : null;
       this.subscribers = Math.max(1, subscribers);
       Sinks.ManySpec many = Sinks.unsafe().many();

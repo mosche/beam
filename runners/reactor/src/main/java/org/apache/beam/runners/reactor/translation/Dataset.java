@@ -22,7 +22,7 @@ import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 
 import java.util.List;
 import java.util.function.Consumer;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.util.WindowedValue;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -33,7 +33,7 @@ public interface Dataset<T, FluxT> {
     return SimpleDataset.IMPULSE;
   }
 
-  <T2> Dataset<T2, ?> transform(Translation<T, T2> t, int subscribers, LocalPipelineOptions opts);
+  <T2> Dataset<T2, ?> transform(Translation<T, T2> t, int subscribers, ReactorOptions opts);
 
   Disposable evaluate(Consumer<? super Throwable> onError, Runnable onComplete);
 
@@ -53,7 +53,7 @@ public interface Dataset<T, FluxT> {
 
     @Override
     public <T2> Dataset<T2, ?> transform(
-        Translation<T, T2> t, int subscribers, LocalPipelineOptions opts) {
+        Translation<T, T2> t, int subscribers, ReactorOptions opts) {
       return new SimpleDataset<>(t.simple(flux, subscribers, opts));
     }
 

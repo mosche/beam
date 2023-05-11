@@ -17,17 +17,16 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
-import org.apache.beam.runners.reactor.TestLocalRunner;
+import org.apache.beam.runners.reactor.ReactorOptions;
+import org.apache.beam.runners.reactor.TestReactorRunner;
 import org.apache.beam.sdk.testing.TestPipeline;
 
 class TestOptions {
   private TestOptions() {}
 
-  static LocalPipelineOptions create() {
-    LocalPipelineOptions opts =
-        TestPipeline.testingPipelineOptions().as(LocalPipelineOptions.class);
-    opts.setRunner(TestLocalRunner.class);
+  static ReactorOptions create() {
+    ReactorOptions opts = TestPipeline.testingPipelineOptions().as(ReactorOptions.class);
+    opts.setRunner(TestReactorRunner.class);
     opts.setMetricsEnabled(true);
     return opts;
   }

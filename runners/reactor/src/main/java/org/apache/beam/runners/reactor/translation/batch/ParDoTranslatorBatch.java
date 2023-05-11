@@ -29,7 +29,7 @@ import java.util.Collection;
 import java.util.Map;
 import org.apache.beam.runners.core.InMemoryMultimapSideInputView;
 import org.apache.beam.runners.core.SideInputReader;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnTranslation;
@@ -106,7 +106,7 @@ class ParDoTranslatorBatch<InT, OutT>
             (k, v) ->
                 checkState(mainOut.equals(k) || cxt.isLeaf(v), "Additional outs unsupported"));
 
-    LocalPipelineOptions opts = cxt.getOptions();
+    ReactorOptions opts = cxt.getOptions();
     MetricsContainer metrics = opts.isMetricsEnabled() ? cxt.getMetricsContainer() : null;
     Mono<SideInputReader> sideInReader =
         sideInputReader(cxt.getTransform().getSideInputs().values(), cxt);

@@ -22,7 +22,7 @@ import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
@@ -57,7 +57,7 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
 
     @Override
     public Flux<WindowedValue<KV<K, OutT>>> simple(
-        Flux<WindowedValue<KV<K, InT>>> flux, LocalPipelineOptions opts) {
+        Flux<WindowedValue<KV<K, InT>>> flux, ReactorOptions opts) {
       return flux.reduceWith(HashMap::new, this::add)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(e.getKey(), fn.extractOutput(e.getValue()))));
@@ -65,7 +65,7 @@ class CombinePerKeyTranslatorBatch<K, InT, AccT, OutT>
 
     @Override
     public Flux<? extends Flux<WindowedValue<KV<K, OutT>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<KV<K, InT>>>> flux, ReactorOptions opts) {
       return flux.subscribeOn(opts.getScheduler())
           .flatMap(group -> group.reduceWith(HashMap::new, this::add), opts.getParallelism())
           .reduce(this::merge)

@@ -24,14 +24,13 @@ import org.apache.beam.sdk.options.PipelineOptionsRegistrar;
 import org.apache.beam.sdk.runners.PipelineRunnerRegistrar;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 
-public final class LocalRunnerRegistrar {
-  private LocalRunnerRegistrar() {}
+public interface ReactorRegistrar {
 
   @AutoService(PipelineRunnerRegistrar.class)
   public static class Runner implements PipelineRunnerRegistrar {
     @Override
     public Iterable<Class<? extends PipelineRunner<?>>> getPipelineRunners() {
-      return ImmutableList.of(LocalRunner.class);
+      return ImmutableList.of(ReactorRunner.class);
     }
   }
 
@@ -39,7 +38,7 @@ public final class LocalRunnerRegistrar {
   public static class Options implements PipelineOptionsRegistrar {
     @Override
     public Iterable<Class<? extends PipelineOptions>> getPipelineOptions() {
-      return ImmutableList.of(LocalPipelineOptions.class);
+      return ImmutableList.of(ReactorOptions.class);
     }
   }
 }

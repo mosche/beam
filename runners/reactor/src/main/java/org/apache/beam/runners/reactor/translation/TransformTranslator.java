@@ -22,7 +22,7 @@ import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.I
 
 import java.util.Map;
 import org.apache.beam.runners.core.construction.TransformInputs;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.annotations.Internal;
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.runners.AppliedPTransform;
@@ -68,7 +68,7 @@ public abstract class TransformTranslator<
 
     MetricsContainer getMetricsContainer();
 
-    LocalPipelineOptions getOptions();
+    ReactorOptions getOptions();
 
     AppliedPTransform<InT, OutT, TransformT> getAppliedTransform();
 

@@ -18,7 +18,7 @@
 package org.apache.beam.runners.reactor.translation;
 
 import javax.annotation.Nullable;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.util.WindowedValue;
 import reactor.core.publisher.Flux;
 
@@ -28,10 +28,10 @@ public interface Translation<T1, T2> {
   }
 
   Flux<WindowedValue<T2>> simple(
-      Flux<WindowedValue<T1>> flux, int subscribers, LocalPipelineOptions opts);
+      Flux<WindowedValue<T1>> flux, int subscribers, ReactorOptions opts);
 
   Flux<? extends Flux<WindowedValue<T2>>> parallel(
-      Flux<? extends Flux<WindowedValue<T1>>> flux, LocalPipelineOptions opts);
+      Flux<? extends Flux<WindowedValue<T1>>> flux, ReactorOptions opts);
 
   interface CanFuse<T1, T2> extends Translation<T1, T2> {
     <T0> boolean fuse(@Nullable Translation<T0, T1> prev);
@@ -40,13 +40,13 @@ public interface Translation<T1, T2> {
   abstract class BasicTranslation<T1, T2> implements Translation<T1, T2> {
     @Override
     public Flux<WindowedValue<T2>> simple(
-        Flux<WindowedValue<T1>> flux, int subscribers, LocalPipelineOptions opts) {
+        Flux<WindowedValue<T1>> flux, int subscribers, ReactorOptions opts) {
       Flux<WindowedValue<T2>> result = simple(flux, opts);
       return subscribers > 1 ? result.publish().refCount(subscribers) : result;
     }
 
     public abstract Flux<WindowedValue<T2>> simple(
-        Flux<WindowedValue<T1>> flux, LocalPipelineOptions opts);
+        Flux<WindowedValue<T1>> flux, ReactorOptions opts);
   }
 
   class Identity<T> implements Translation<T, T> {
@@ -54,13 +54,13 @@ public interface Translation<T1, T2> {
 
     @Override
     public Flux<WindowedValue<T>> simple(
-        Flux<WindowedValue<T>> flux, int subscribers, LocalPipelineOptions opts) {
+        Flux<WindowedValue<T>> flux, int subscribers, ReactorOptions opts) {
       return flux;
     }
 
     @Override
     public Flux<? extends Flux<WindowedValue<T>>> parallel(
-        Flux<? extends Flux<WindowedValue<T>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<T>>> flux, ReactorOptions opts) {
       return flux;
     }
   }

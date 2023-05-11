@@ -23,7 +23,7 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
-public interface LocalPipelineOptions extends PipelineOptions {
+public interface ReactorOptions extends PipelineOptions {
   enum SDFMode {
     SYNC,
     ASYNC

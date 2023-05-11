@@ -17,7 +17,7 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
@@ -69,13 +69,13 @@ class CombineGroupedValuesTranslatorBatch<K, InT, AccT, OutT>
 
     @Override
     public Flux<WindowedValue<KV<K, OutT>>> simple(
-        Flux<WindowedValue<KV<K, Iterable<InT>>>> flux, LocalPipelineOptions opts) {
+        Flux<WindowedValue<KV<K, Iterable<InT>>>> flux, ReactorOptions opts) {
       return flux.map(this::reduce);
     }
 
     @Override
     public Flux<Flux<WindowedValue<KV<K, OutT>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, Iterable<InT>>>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<KV<K, Iterable<InT>>>>> flux, ReactorOptions opts) {
       return flux.map(f -> simple(f, opts));
     }
   }

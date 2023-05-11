@@ -23,7 +23,7 @@ import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.I
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.Translation;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -80,7 +80,7 @@ class GroupByKeyTranslatorBatch<K, V>
 
     @Override
     public Flux<WindowedValue<KV<K, Iterable<V>>>> simple(
-        Flux<WindowedValue<KV<K, V>>> flux, LocalPipelineOptions opts) {
+        Flux<WindowedValue<KV<K, V>>> flux, ReactorOptions opts) {
       return flux.collectMultimap(keyMapper, valueMapper)
           .flatMapIterable(Map::entrySet)
           .map(e -> valueInGlobalWindow(KV.of(keyFn.reverse().convert(e.getKey()), e.getValue())));
@@ -88,7 +88,7 @@ class GroupByKeyTranslatorBatch<K, V>
 
     @Override
     public Flux<? extends Flux<WindowedValue<KV<K, Iterable<V>>>>> parallel(
-        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, LocalPipelineOptions opts) {
+        Flux<? extends Flux<WindowedValue<KV<K, V>>>> flux, ReactorOptions opts) {
       Flux<Map<KIntT, Iterable<V>>> maps =
           flux.subscribeOn(opts.getScheduler())
               .flatMap(

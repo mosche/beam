@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
-import org.apache.beam.runners.reactor.LocalPipelineOptions;
+import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.annotations.Internal;
@@ -61,7 +61,7 @@ public abstract class PipelineTranslator {
       TransformTranslator<InT, OutT, TransformT> getTransformTranslator(TransformT transform);
 
   public Future<Void> evaluate(
-      Pipeline pipeline, LocalPipelineOptions options, MetricsContainerStepMap metrics) {
+      Pipeline pipeline, ReactorOptions options, MetricsContainerStepMap metrics) {
     DependencyVisitor dependencies = new DependencyVisitor();
     pipeline.traverseTopologically(dependencies);
 
@@ -85,7 +85,7 @@ public abstract class PipelineTranslator {
   private class EagerEvaluationVisitor extends PTransformVisitor
       implements TransformTranslator.Context<PInput, POutput, PTransform<PInput, POutput>> {
     private final Map<PCollection<?>, @Nullable TranslationState<?, ?>> translations;
-    private final LocalPipelineOptions options;
+    private final ReactorOptions options;
     private final MetricsContainerStepMap metrics;
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
     private final Set<Disposable> leaves = new HashSet<>();
@@ -98,7 +98,7 @@ public abstract class PipelineTranslator {
     private @Nullable AppliedPTransform<?, ?, ?> currentTransform = null;
 
     EagerEvaluationVisitor(
-        LocalPipelineOptions options,
+        ReactorOptions options,
         MetricsContainerStepMap metrics,
         Map<PCollection<?>, @Nullable TranslationState<?, ?>> translations) {
       this.translations = translations;
@@ -226,7 +226,7 @@ public abstract class PipelineTranslator {
     }
 
     @Override
-    public LocalPipelineOptions getOptions() {
+    public ReactorOptions getOptions() {
       return options;
     }
   }
