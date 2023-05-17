@@ -39,6 +39,10 @@ public final class ReactorRunner extends PipelineRunner<ReactorPipelineResult> {
     return new ReactorRunner(PipelineOptionsValidator.validate(ReactorOptions.class, options));
   }
 
+  public static ReactorRunner create(ReactorOptions options) {
+    return new ReactorRunner(options);
+  }
+
   private ReactorRunner(ReactorOptions options) {
     this.options = options;
   }
