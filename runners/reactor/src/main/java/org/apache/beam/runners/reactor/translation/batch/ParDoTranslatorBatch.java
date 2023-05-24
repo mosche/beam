@@ -17,7 +17,6 @@
  */
 package org.apache.beam.runners.reactor.translation.batch;
 
-import static avro.shaded.com.google.common.collect.Iterables.transform;
 import static java.util.Collections.EMPTY_LIST;
 import static java.util.Collections.singletonMap;
 import static org.apache.beam.sdk.transforms.Materializations.ITERABLE_MATERIALIZATION_URN;
@@ -57,6 +56,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -215,7 +215,7 @@ class ParDoTranslatorBatch<InT, OutT>
       TupleTag<?> tag = view.getTagInternal();
       Iterable<WindowedValue<T>> windowedIt =
           checkStateNotNull(datasets.get(tag), "View %s not available.", view);
-      Iterable<T> it = transform(windowedIt, WindowedValue::getValue);
+      Iterable<T> it = Iterables.transform(windowedIt, WindowedValue::getValue);
       ViewFn viewFn = view.getViewFn();
       switch (viewFn.getMaterialization().getUrn()) {
         case ITERABLE_MATERIALIZATION_URN:

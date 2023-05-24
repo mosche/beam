@@ -54,21 +54,20 @@ class GroupByKeyTranslatorBatch<K, V>
     cxt.translate(cxt.getOutput(), new TranslateGroupByKey<>(keyFn));
   }
 
-  private static class TranslateGroupByKey<K, KIntT, V>
+  private static class TranslateGroupByKey<K, K2, V>
       extends Translation.BasicTranslation<KV<K, V>, KV<K, Iterable<V>>> {
-    final Function<WindowedValue<KV<K, V>>, KIntT> keyMapper;
+    final Function<WindowedValue<KV<K, V>>, K2> keyMapper;
     final Function<WindowedValue<KV<K, V>>, V> valueMapper;
-    final Converter<K, KIntT> keyFn;
+    final Converter<K, K2> keyFn;
 
     @SuppressWarnings("nullness")
-    TranslateGroupByKey(Converter<K, KIntT> keyFn) {
+    TranslateGroupByKey(Converter<K, K2> keyFn) {
       this.keyFn = keyFn;
       keyMapper = wv -> keyFn.convert(wv.getValue().getKey());
       valueMapper = wv -> wv.getValue().getValue();
     }
 
-    private Map<KIntT, Iterable<V>> merge(
-        Map<KIntT, Iterable<V>> map1, Map<KIntT, Iterable<V>> map2) {
+    private Map<K2, Iterable<V>> merge(Map<K2, Iterable<V>> map1, Map<K2, Iterable<V>> map2) {
       if (map2.size() > map1.size()) {
         return merge(map2, map1);
       }
@@ -117,6 +116,11 @@ class GroupByKeyTranslatorBatch<K, V>
     @SuppressWarnings("argument")
     protected Row doBackward(List<@Nullable Object> values) {
       return Row.withSchema(schema).attachValues(values);
+    }
+
+    @Override
+    public int hashCode() {
+      return super.hashCode(); // just make spotbugs happy
     }
   }
 }

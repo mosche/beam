@@ -77,7 +77,7 @@ public abstract class DoFnRunnerFactory<InT, T> {
    */
   abstract <T2> DoFnRunnerFactory<InT, T2> fuse(DoFnRunnerFactory<T, T2> next);
 
-  /** This factory produces an SDF runner */
+  /** True if factory produces an SDF runner. */
   abstract boolean isSDF();
 
   public static <InT, T> DoFnRunnerFactory<InT, T> simple(
