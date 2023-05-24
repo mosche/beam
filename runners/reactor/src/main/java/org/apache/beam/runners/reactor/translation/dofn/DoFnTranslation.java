@@ -19,9 +19,11 @@ package org.apache.beam.runners.reactor.translation.dofn;
 
 import static java.lang.Thread.currentThread;
 import static org.apache.beam.runners.reactor.ReactorOptions.SDFMode.ASYNC;
+import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
 import org.apache.beam.runners.reactor.ReactorOptions;
@@ -30,6 +32,7 @@ import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory.Runner
 import org.apache.beam.sdk.metrics.MetricsContainer;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
@@ -66,49 +69,68 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
   @Override
   public Flux<WindowedValue<T2>> simple(
       Flux<WindowedValue<T1>> fluxIn, int subscribers, ReactorOptions opts) {
-    final SinkOutputManager<T2> out = new SinkOutputManager<>(subscribers, factory.isSDF(), opts);
-    return Flux.defer(() -> out.createOutput(fluxIn, factory, metrics));
+    final SingleDoFnSink<T2> out = new SingleDoFnSink<>(subscribers, factory.isSDF(), opts);
+    return Flux.defer(() -> out.getOrSubscribe(fluxIn, out.sink.asFlux(), factory, metrics));
   }
 
-  /** OutputManager that emits output to a FluxSink. */
-  private static class SinkOutputManager<T2> implements OutputManager {
-    private final AtomicInteger counter = new AtomicInteger();
-    private final int subscribers;
-    private final @Nullable Scheduler scheduler;
-    private Sinks.Many<WindowedValue<T2>> sink;
+  @SuppressWarnings("argument") // null keys not allowed here
+  @Override
+  public Map<TupleTag<?>, Flux<WindowedValue<T2>>> simpleTagged(
+      Flux<WindowedValue<T1>> fluxIn, Map<TupleTag<?>, Integer> subscribers, ReactorOptions opts) {
+    final TaggedDoFnSink<T2> out = new TaggedDoFnSink<>(subscribers, factory.isSDF(), opts);
+    return Maps.asMap(
+        subscribers.keySet(),
+        tag -> Flux.defer(() -> out.getOrSubscribe(tag, fluxIn, factory, metrics)));
+  }
 
-    SinkOutputManager(int subscribers, boolean isSdf, ReactorOptions opts) {
+  private abstract static class DoFnSink implements OutputManager {
+    private final AtomicBoolean isSubscribed = new AtomicBoolean();
+    private final @Nullable Scheduler scheduler;
+
+    private DoFnSink(boolean isSdf, ReactorOptions opts) {
       this.scheduler = isSdf && opts.getSDFMode() == ASYNC ? opts.getScheduler() : null;
-      this.subscribers = Math.max(1, subscribers);
-      Sinks.ManySpec many = Sinks.unsafe().many();
-      this.sink = subscribers <= 1 ? many.unicast().onBackpressureBuffer() : many.replay().all();
     }
 
-    <T1> Flux<WindowedValue<T2>> createOutput(
+    protected <T1, T2> Flux<WindowedValue<T2>> getOrSubscribe(
         Flux<WindowedValue<T1>> in,
+        Flux<WindowedValue<T2>> out,
         DoFnRunnerFactory<T1, T2> factory,
         @Nullable MetricsContainer metrics) {
-      int count = counter.incrementAndGet();
-      Flux<WindowedValue<T2>> internalOut = sink.asFlux();
-      Flux<WindowedValue<T2>> out =
-          count == 1
+      Flux<WindowedValue<T2>> subscribedOut =
+          isSubscribed.compareAndSet(false, true)
               ? Flux.usingWhen(
                   factory.create(this, metrics),
                   runner -> {
                     in.subscribe(new GroupSubscriber<>(runner, this));
-                    return internalOut;
+                    return out;
                   },
                   runner -> Mono.fromRunnable(runner::teardown))
-              : internalOut; // just replay internal sink
-      if (count > subscribers) {
-        dispose();
-      }
-
+              : out;
       if (scheduler == null) {
-        return out;
+        return subscribedOut;
       }
       Scheduler pinned = Schedulers.single(scheduler);
-      return out.publishOn(pinned).doOnTerminate(pinned::dispose);
+      return subscribedOut.publishOn(pinned).doOnTerminate(pinned::dispose);
+    }
+
+    static <T2> Sinks.Many<WindowedValue<T2>> createSink(int subscribers) {
+      Sinks.ManySpec many = Sinks.unsafe().many();
+      // TODO enable memory optimized mode via options using publish with refcount
+      return subscribers <= 1 ? many.unicast().onBackpressureBuffer() : many.replay().all();
+    }
+
+    abstract void complete();
+
+    abstract void error(Throwable e);
+  }
+
+  /** OutputManager that emits DoFn output to a FluxSink. */
+  private static class SingleDoFnSink<T2> extends DoFnSink {
+    private Sinks.Many<WindowedValue<T2>> sink;
+
+    SingleDoFnSink(int subscribers, boolean isSdf, ReactorOptions opts) {
+      super(isSdf, opts);
+      this.sink = createSink(subscribers);
     }
 
     @Override
@@ -116,35 +138,61 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
       sink.emitNext((WindowedValue<T2>) out, FAIL_FAST); // TODO revisit
     }
 
+    @Override
     void complete() {
       sink.emitComplete(FAIL_FAST); // TODO Revisit
-      if (counter.incrementAndGet() > subscribers) {
-        dispose();
-      }
     }
 
+    @Override
     void error(Throwable e) {
       sink.emitError(e, FAIL_FAST); // TODO Revisit
-      if (counter.getAndDecrement() <= 0) {
-        dispose();
-      }
+    }
+  }
+
+  private static class TaggedDoFnSink<T2> extends DoFnSink {
+    private final Map<TupleTag<?>, Sinks.Many<WindowedValue<T2>>> sinks;
+
+    TaggedDoFnSink(
+        Map<TupleTag<?>, Integer> subscribersPerOutput, boolean isSdf, ReactorOptions opts) {
+      super(isSdf, opts);
+      this.sinks = Maps.newHashMapWithExpectedSize(subscribersPerOutput.size());
+      subscribersPerOutput.forEach((tag, subscribers) -> sinks.put(tag, createSink(subscribers)));
     }
 
-    @SuppressWarnings("nullness")
-    void dispose() {
-      sink = null;
+    <T1> Flux<WindowedValue<T2>> getOrSubscribe(
+        TupleTag<?> tag,
+        Flux<WindowedValue<T1>> in,
+        DoFnRunnerFactory<T1, T2> factory,
+        @Nullable MetricsContainer metrics) {
+      return getOrSubscribe(in, checkStateNotNull(sinks.get(tag)).asFlux(), factory, metrics);
+    }
+
+    @Override
+    public <T> void output(TupleTag<T> tag, WindowedValue<T> out) {
+      checkStateNotNull(sinks.get(tag))
+          .emitNext((WindowedValue<T2>) out, FAIL_FAST); // TODO revisit
+    }
+
+    @Override
+    void complete() {
+      sinks.forEach((t, sink) -> sink.emitComplete(FAIL_FAST)); // TODO Revisit
+    }
+
+    @Override
+    void error(Throwable e) {
+      sinks.forEach((t, sink) -> sink.emitError(e, FAIL_FAST)); // TODO Revisit
     }
   }
 
   private static class GroupSubscriber<T1, T2> extends BaseSubscriber<WindowedValue<T1>> {
     private static final Logger LOG = LoggerFactory.getLogger(GroupSubscriber.class);
-    private final SinkOutputManager<T2> output;
+    private final DoFnSink output;
     private final RunnerWithTeardown<T1, T2> runner;
 
     // Track thread used to call DoFn runner
     private final AtomicReference<@Nullable Thread> pinned = new AtomicReference<>();
 
-    GroupSubscriber(RunnerWithTeardown<T1, T2> runner, SinkOutputManager<T2> output) {
+    GroupSubscriber(RunnerWithTeardown<T1, T2> runner, DoFnSink output) {
       this.output = output;
       this.runner = runner;
     }
@@ -165,7 +213,6 @@ public class DoFnTranslation<T1, T2> implements Translation<T1, T2>, Translation
         pinned.lazySet(current); // update pinned lazily
       }
 
-      LOG.trace("{}: processElement {} [{}]", runner, wv.getValue(), current);
       runner.processElement(wv);
       upstream().request(1);
     }

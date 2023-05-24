@@ -24,6 +24,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.beam.runners.core.DoFnRunner;
 import org.apache.beam.runners.core.DoFnRunners.OutputManager;
@@ -82,8 +83,9 @@ public abstract class DoFnRunnerFactory<InT, T> {
   public static <InT, T> DoFnRunnerFactory<InT, T> simple(
       ReactorOptions opts,
       AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
+      Set<TupleTag<?>> requiredOuts,
       Mono<SideInputReader> sideInputReader) {
-    return new SimpleFactory<>(opts, appliedPT, sideInputReader);
+    return new SimpleFactory<>(opts, appliedPT, requiredOuts, sideInputReader);
   }
 
   private static class SimpleFactory<InT, T> extends DoFnRunnerFactory<InT, T> {
@@ -96,14 +98,17 @@ public abstract class DoFnRunnerFactory<InT, T> {
     final boolean isSDF;
     final DoFnSchemaInformation schemaInformation;
     final Mono<SideInputReader> sideInputs;
+    final Set<TupleTag<?>> requiredOuts;
 
     SimpleFactory(
         ReactorOptions opts,
         AppliedPTransform<PCollection<? extends InT>, ?, ParDo.MultiOutput<InT, T>> appliedPT,
+        Set<TupleTag<?>> requiredOuts,
         Mono<SideInputReader> sideInputs) {
       this.opts = opts;
       this.transform = appliedPT.getTransform();
       this.schemaInformation = getSchemaInformation(appliedPT);
+      this.requiredOuts = requiredOuts;
       this.sideInputs = sideInputs;
       this.isSDF = SPLITTABLE_MATCHER.matches(appliedPT); // fuse all but SDFs
     }
@@ -126,14 +131,14 @@ public abstract class DoFnRunnerFactory<InT, T> {
     private RunnerWithTeardown<InT, T> create(
         SideInputReader reader, OutputManager out, @Nullable MetricsContainer metrics) {
       List<TupleTag<?>> additionalOuts = transform.getAdditionalOutputTags().getAll();
-      TupleTag<T> mainOut = transform.getMainOutputTag();
+      boolean requiresFiltering = requiredOuts.size() < additionalOuts.size() + 1;
       DoFnRunner<InT, T> runner =
           new SimpleDoFnRunner<>(
               opts,
               getDoFnInstance(),
               reader,
-              additionalOuts.isEmpty() ? out : new FilteredOutput(out, mainOut),
-              mainOut,
+              requiresFiltering ? new FilteredOutput(out, requiredOuts) : out,
+              transform.getMainOutputTag(),
               additionalOuts,
               NoOpStepContext.INSTANCE,
               null, // no coders used
@@ -152,21 +157,21 @@ public abstract class DoFnRunnerFactory<InT, T> {
     }
 
     /**
-     * Delegate {@link OutputManager} that only forwards outputs matching the provided tag. This is
-     * used in cases where unused, obsolete outputs get dropped to avoid unnecessary caching.
+     * Delegate {@link OutputManager} that only forwards outputs matching the provided tags. This is
+     * used to drop unused, obsolete outputs.
      */
     private static class FilteredOutput implements OutputManager {
       final OutputManager outputManager;
-      final TupleTag<?> tupleTag;
+      final Set<TupleTag<?>> tags;
 
-      FilteredOutput(OutputManager outputManager, TupleTag<?> tupleTag) {
+      FilteredOutput(OutputManager outputManager, Set<TupleTag<?>> tags) {
         this.outputManager = outputManager;
-        this.tupleTag = tupleTag;
+        this.tags = tags;
       }
 
       @Override
       public <T> void output(TupleTag<T> tag, WindowedValue<T> output) {
-        if (tupleTag.equals(tag)) {
+        if (tags.contains(tag)) {
           outputManager.output(tag, output);
         }
       }

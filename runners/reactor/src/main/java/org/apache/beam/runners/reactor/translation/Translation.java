@@ -17,9 +17,11 @@
  */
 package org.apache.beam.runners.reactor.translation;
 
+import java.util.Map;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.values.TupleTag;
 import reactor.core.publisher.Flux;
 
 public interface Translation<T1, T2> {
@@ -29,6 +31,11 @@ public interface Translation<T1, T2> {
 
   Flux<WindowedValue<T2>> simple(
       Flux<WindowedValue<T1>> flux, int subscribers, ReactorOptions opts);
+
+  default Map<TupleTag<?>, Flux<WindowedValue<T2>>> simpleTagged(
+      Flux<WindowedValue<T1>> fluxIn, Map<TupleTag<?>, Integer> subscribers, ReactorOptions opts) {
+    throw new UnsupportedOperationException();
+  }
 
   interface CanFuse<T1, T2> extends Translation<T1, T2> {
     <T0> boolean fuse(@Nullable Translation<T0, T1> prev);

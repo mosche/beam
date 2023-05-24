@@ -19,17 +19,21 @@ package org.apache.beam.runners.reactor.translation.batch;
 
 import static avro.shaded.com.google.common.collect.Iterables.transform;
 import static java.util.Collections.EMPTY_LIST;
+import static java.util.Collections.singletonMap;
 import static org.apache.beam.sdk.transforms.Materializations.ITERABLE_MATERIALIZATION_URN;
 import static org.apache.beam.sdk.transforms.Materializations.MULTIMAP_MATERIALIZATION_URN;
 import static org.apache.beam.sdk.util.Preconditions.checkStateNotNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects.firstNonNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables.getOnlyElement;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps.transformValues;
 
 import java.util.Collection;
 import java.util.Map;
 import org.apache.beam.runners.core.InMemoryMultimapSideInputView;
 import org.apache.beam.runners.core.SideInputReader;
 import org.apache.beam.runners.reactor.ReactorOptions;
+import org.apache.beam.runners.reactor.translation.Dataset;
 import org.apache.beam.runners.reactor.translation.TransformTranslator;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnRunnerFactory;
 import org.apache.beam.runners.reactor.translation.dofn.DoFnTranslation;
@@ -53,6 +57,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import reactor.core.publisher.Flux;
@@ -99,21 +104,55 @@ class ParDoTranslatorBatch<InT, OutT>
             || getInputWindowFn(cxt) instanceof IdentityWindowFn,
         "Only default WindowingStrategy supported");
 
-    TupleTag<OutT> mainOut = cxt.getTransform().getMainOutputTag();
-    // Only main allowed. Leaf outputs can be ignored, these are not used.
-    cxt.getOutputs()
-        .forEach(
-            (k, v) ->
-                checkState(mainOut.equals(k) || cxt.isLeaf(v), "Additional outs unsupported"));
+    // Filter out obsolete PCollections to only cache when absolutely necessary
+    Map<TupleTag<?>, PCollection<?>> outputs = skipObsoleteOutputs(cxt);
 
     ReactorOptions opts = cxt.getOptions();
     MetricsContainer metrics = opts.isMetricsEnabled() ? cxt.getMetricsContainer() : null;
     Mono<SideInputReader> sideInReader =
         sideInputReader(cxt.getTransform().getSideInputs().values(), cxt);
     DoFnRunnerFactory<InT, OutT> factory =
-        DoFnRunnerFactory.simple(opts, cxt.getAppliedTransform(), sideInReader);
+        DoFnRunnerFactory.simple(opts, cxt.getAppliedTransform(), outputs.keySet(), sideInReader);
 
-    cxt.translate(cxt.getOutput(mainOut), new DoFnTranslation<>(factory, metrics));
+    DoFnTranslation<InT, OutT> translation = new DoFnTranslation<>(factory, metrics);
+    if (outputs.size() == 1) {
+      PCollection<OutT> pOut = (PCollection<OutT>) getOnlyElement(outputs.values());
+      cxt.translate(pOut, translation);
+    } else {
+      Dataset<InT, ?> input = (Dataset<InT, ?>) cxt.require(cxt.getInput());
+      input
+          .transformTagged(translation, transformValues(outputs, cxt::subscribers), opts)
+          .forEach(
+              (tag, output) -> {
+                PCollection<OutT> pOut = checkStateNotNull((PCollection<OutT>) outputs.get(tag));
+                cxt.provide(pOut, output);
+              });
+    }
+  }
+
+  /** Filter out obsolete, unused output tags except for {@code mainTag}. */
+  private Map<TupleTag<?>, PCollection<?>> skipObsoleteOutputs(
+      Context<PCollection<? extends InT>, PCollectionTuple, ParDo.MultiOutput<InT, OutT>> cxt) {
+    Map<TupleTag<?>, PCollection<?>> outs = cxt.getOutputs();
+    ParDo.MultiOutput<InT, OutT> tf = cxt.getTransform();
+    switch (outs.size()) {
+      case 1:
+        return outs; // always keep main output
+      case 2:
+        TupleTag<?> otherTag = tf.getAdditionalOutputTags().get(0);
+        return cxt.isLeaf(checkStateNotNull(outs.get(otherTag)))
+            ? singletonMap(
+                tf.getMainOutputTag(), checkStateNotNull(outs.get(tf.getMainOutputTag())))
+            : outs;
+      default:
+        Map<TupleTag<?>, PCollection<?>> filtered = Maps.newHashMapWithExpectedSize(outs.size());
+        for (Map.Entry<TupleTag<?>, PCollection<?>> e : outs.entrySet()) {
+          if (e.getKey().equals(tf.getMainOutputTag()) || !cxt.isLeaf(e.getValue())) {
+            filtered.put(e.getKey(), e.getValue());
+          }
+        }
+        return filtered;
+    }
   }
 
   private <T> Mono<SideInputReader> sideInputReader(

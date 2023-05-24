@@ -68,6 +68,17 @@ public class ParDoTest {
     pipeline.run();
   }
 
+  @Test
+  public void testPardoWithAdditionalOutput() {
+    PCollectionTuple outputs =
+        plusOne().apply("even", ParDo.of(EVEN_DOFN).withOutputTags(EVEN, TupleTagList.of(UNEVEN)));
+
+    PAssert.that(outputs.get(EVEN)).containsInAnyOrder(2, 4, 6, 8, 10);
+    PAssert.that(outputs.get(UNEVEN)).containsInAnyOrder(3, 5, 7, 9, 11);
+
+    pipeline.run();
+  }
+
   @Test(expected = Pipeline.PipelineExecutionException.class)
   public void testPardoUserException() {
     pipeline.apply(Create.of(1)).apply(ParDo.of(THROWING_DOFN));
@@ -154,7 +165,7 @@ public class ParDoTest {
       };
 
   private static final TupleTag<Integer> EVEN = new TupleTag<Integer>() {};
-  private static final TupleTag<String> UNEVEN = new TupleTag<String>() {};
+  private static final TupleTag<Integer> UNEVEN = new TupleTag<Integer>() {};
   private static final DoFn<Integer, Integer> EVEN_DOFN =
       new DoFn<Integer, Integer>() {
         @ProcessElement
@@ -162,7 +173,7 @@ public class ParDoTest {
           if (i % 2 == 0) {
             out.get(EVEN).output(i);
           } else {
-            out.get(UNEVEN).output(i.toString());
+            out.get(UNEVEN).output(i);
           }
         }
       };

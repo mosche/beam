@@ -21,9 +21,12 @@ import static org.apache.beam.repackaged.core.org.apache.commons.lang3.ArrayUtil
 import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import org.apache.beam.runners.reactor.ReactorOptions;
 import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -34,6 +37,9 @@ public interface Dataset<T, FluxT> {
   }
 
   <T2> Dataset<T2, ?> transform(Translation<T, T2> t, int subscribers, ReactorOptions opts);
+
+  <T2> Map<TupleTag<?>, Dataset<T2, ?>> transformTagged(
+      Translation<T, T2> t, Map<TupleTag<?>, Integer> subscribers, ReactorOptions opts);
 
   Disposable evaluate(Consumer<? super Throwable> onError, Runnable onComplete);
 
@@ -55,6 +61,12 @@ public interface Dataset<T, FluxT> {
     public <T2> Dataset<T2, ?> transform(
         Translation<T, T2> t, int subscribers, ReactorOptions opts) {
       return new SimpleDataset<>(t.simple(flux, subscribers, opts));
+    }
+
+    @Override
+    public <T2> Map<TupleTag<?>, Dataset<T2, ?>> transformTagged(
+        Translation<T, T2> t, Map<TupleTag<?>, Integer> subscribers, ReactorOptions opts) {
+      return Maps.transformValues(t.simpleTagged(flux, subscribers, opts), SimpleDataset::new);
     }
 
     @Override

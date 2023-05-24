@@ -60,6 +60,8 @@ public abstract class TransformTranslator<
       InT extends PInput, OutT extends POutput, TransformT extends PTransform<InT, OutT>> {
     <T> void provide(PCollection<T> pCollection, Dataset<T, ?> dataset);
 
+    <T> int subscribers(PCollection<T> pCollection);
+
     <T> Dataset<T, ?> require(PCollection<T> pCollection);
 
     <T1, T2> void translate(PCollection<T2> pCollection, Translation<T1, T2> translation);

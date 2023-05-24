@@ -176,6 +176,11 @@ public abstract class PipelineTranslator {
     }
 
     @Override
+    public <T> int subscribers(PCollection<T> pCollection) {
+      return getResult(pCollection).subscribers;
+    }
+
+    @Override
     public <T> Dataset<T, ?> require(PCollection<T> pCollection) {
       return getOrBuildDataset(getResult(pCollection));
     }
