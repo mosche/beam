@@ -62,6 +62,7 @@ public abstract class PipelineTranslator {
 
   public Future<Void> evaluate(
       Pipeline pipeline, ReactorOptions options, MetricsContainerStepMap metrics) {
+    LOG.info("Pipeline translation started");
     DependencyVisitor dependencies = new DependencyVisitor();
     pipeline.traverseTopologically(dependencies);
 
@@ -106,13 +107,14 @@ public abstract class PipelineTranslator {
       this.metrics = metrics;
       this.onError =
           e -> {
-            LOG.error("Received error", e);
+            LOG.error("Pipeline execution failed", e);
             leaves.forEach(Disposable::dispose);
             completion.completeExceptionally(e);
           };
       this.onComplete =
           () -> {
             if (pendingLeaves.decrementAndGet() == 0) {
+              LOG.info("Pipeline completed successfully");
               completion.complete(null);
               // the default cached parallel scheduler won't be disposed
               options.getScheduler().dispose();
